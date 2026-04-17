@@ -1,7 +1,8 @@
 {
   "name": "Ruteador GPS",
   "short_name": "Ruteador",
-  "start_url": "./",
+  "start_url": "/gestor-operativo-app/index.html"
+  "scope": "/gestor-operativo-app/"
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#000000",
