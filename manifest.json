@@ -4,6 +4,8 @@
   "start_url": "/gestor-operativo-app/index.html"
   "scope": "/gestor-operativo-app/"
   "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#000000",
   "icons": [
