@@ -1,0 +1,2273 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="manifest" href="manifest.json">
+    <title>App Operativa EEQ - Ruteador + Informe</title>
+    
+    <!-- Tailwind CSS (Para Ruteador y Navegación) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Librerías para Ruteador -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    
+    <!-- Librería para el Mapa Local (Leaflet) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Leaflet MarkerCluster para agrupación inteligente y despliegue -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    
+    <!-- Librería para Excel (Informe 21) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <!-- FASE 2: Librería de Compresión (LZ-String) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'eeq-blue': '#005b9f',
+                        'eeq-light': '#0084d1',
+                        'eeq-accent': '#ffcc00'
+                    }
+                }
+            }
+        }
+
+        // FASE 1: Utilidad de Seguridad Global (Prevención XSS)
+        window.escapeHTML = function(str) {
+            if (str === null || str === undefined) return '';
+            return str.toString().replace(/[&<>'"]/g, 
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag] || tag)
+            );
+        };
+
+        // FASE 2: Capa de Gestión de Almacenamiento (Compresión Síncrona Transparente)
+        window.StorageManager = {
+            get: function(key, defaultValue = null) {
+                try {
+                    const raw = localStorage.getItem(key);
+                    if (!raw) return defaultValue;
+                    
+                    // Verificación de migración: Si el dato empieza con un carácter JSON válido, no está comprimido aún
+                    if (raw.startsWith('[') || raw.startsWith('{') || raw.startsWith('"')) {
+                        return JSON.parse(raw);
+                    }
+                    
+                    // Si no, descomprimimos
+                    let decompressed = LZString.decompressFromUTF16(raw);
+                    if (decompressed) return JSON.parse(decompressed);
+                    
+                    return JSON.parse(raw); // Fallback extremo
+                } catch (e) {
+                    console.warn("Error leyendo de StorageManager:", key, e);
+                    return defaultValue;
+                }
+            },
+            set: function(key, value) {
+                try {
+                    const stringified = JSON.stringify(value);
+                    const compressed = LZString.compressToUTF16(stringified);
+                    localStorage.setItem(key, compressed);
+                } catch (e) {
+                    console.error("Error guardando en StorageManager:", key, e);
+                    if (window.showToast) window.showToast("❌ ERROR DE MEMORIA. BORRE HISTORIAL.");
+                }
+            },
+            remove: function(key) {
+                localStorage.removeItem(key);
+            }
+        };
+
+        // --- NUEVA CAPA AUXILIAR: UI BOTONES TOGGLE (Sin afectar base) ---
+        window.setToggleValue = function(selectId, value) {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+            
+            // Lógica Toggle: Si ya está seleccionado, lo desmarca (vuelve a "")
+            if (select.value === value) {
+                select.value = "";
+            } else {
+                select.value = value;
+            }
+            
+            // Disparar evento para que 'saveDraft' interno detecte el cambio mágicamente
+            select.dispatchEvent(new Event('change'));
+            select.dispatchEvent(new Event('input'));
+            
+            // Actualizar UI
+            window.syncTogglesUI();
+        };
+
+        window.syncTogglesUI = function() {
+            const toggleGroups = ['db_ret_bor', 'db_ret_car', 'db_ret_reg', 'db_ret_tapa'];
+            toggleGroups.forEach(id => {
+                const select = document.getElementById(id);
+                if (!select) return;
+                const val = select.value;
+                const container = select.parentElement;
+                
+                container.querySelectorAll('.btn-toggle').forEach(btn => {
+                    if (btn.getAttribute('data-val') === val) {
+                        btn.classList.add('bg-eeq-blue', 'text-white', 'border-eeq-blue');
+                        btn.classList.remove('bg-gray-100', 'text-gray-500', 'border-gray-300');
+                    } else {
+                        btn.classList.remove('bg-eeq-blue', 'text-white', 'border-eeq-blue');
+                        btn.classList.add('bg-gray-100', 'text-gray-500', 'border-gray-300');
+                    }
+                });
+            });
+        };
+
+        // Sincronizar automáticamente tras cargar drafts o resetear (0 impacto a lógica existente)
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(window.syncTogglesUI, 600); 
+            const form = document.getElementById('reportForm');
+            if (form) {
+                form.addEventListener('reset', () => setTimeout(window.syncTogglesUI, 50));
+            }
+        });
+        // -----------------------------------------------------------------
+    </script>
+
+    <!-- FASE 3: Enlace a Capa Externa PWA (Archivos externos) -->
+    <link rel="manifest" href="./manifest.json">
+    <script>
+        if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./service-worker.js', { scope: './' })
+                .catch(err => console.warn('PWA Offline Layer omitida (se requiere HTTPS o Localhost).', err));
+            });
+        }
+    </script>
+
+    <style>
+        /* ==========================================
+           ESTILOS GLOBALES COMPARTIDOS
+           ========================================== */
+        html, body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background-color: #f3f4f6; 
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            overflow-x: hidden;
+        }
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+        
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #005b9f; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .view-container {
+            display: none;
+            height: calc(100vh - 60px);
+            height: calc(100dvh - 60px); /* Ajuste dinámico para navegadores móviles modernos */
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-bottom: 100px; /* Incrementado para prevenir superposiciones en scroll */
+            width: 100%;
+        }
+        .view-container.active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ==========================================
+           ESTILOS ESPECÍFICOS PARA EL INFORME 21
+           ========================================== */
+        .informe-wrapper {
+            /* FASE VISUAL: Colores idénticos al Ruteador GPS */
+            --primary: #005b9f; /* eeq-blue */
+            --primary-light: #e0f2fe; /* Azul claro suave */
+            --accent: #0084d1; /* eeq-light */
+            --accent-yellow: #ffcc00; /* eeq-accent */
+            --bg: #f3f4f6; /* Mismo fondo global */
+            --text: #1f2937; /* Texto oscuro moderno */
+            --border: #d1d5db;
+            --white: #ffffff;
+            --success: #16a34a; 
+            --error: #dc2626; 
+            --warning: #ca8a04; 
+            --temp: #f8fafc;
+            background-color: var(--bg);
+            color: var(--text);
+            padding: 15px;
+            padding-bottom: 120px; /* 🚨 Espacio vital garantizado al final del scroll */
+            font-size: 16px;
+            min-height: 100%;
+            max-width: 100%;
+            overflow-x: hidden;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .informe-wrapper * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        
+        /* Aumento del ancho para que los formularios ocupen más espacio en pantalla */
+        .informe-wrapper .container-inf { max-width: 850px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+        
+        .informe-wrapper header {
+            text-align: center;
+            background: var(--white);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            border-top: 6px solid var(--primary);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        .informe-wrapper h1 { margin: 0; font-size: 1.25rem; color: var(--primary); text-transform: uppercase; font-weight: 900; }
+
+        .informe-wrapper .edit-mode-indicator {
+            display: none;
+            background: var(--accent-yellow);
+            color: var(--primary);
+            padding: 8px;
+            font-size: 0.85rem;
+            font-weight: 900;
+            text-align: center;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            box-shadow: 0 2px 4px rgba(255, 204, 0, 0.3);
+        }
+
+        .informe-wrapper .report-section {
+            background: var(--white);
+            border-radius: 12px; /* Redondeado igual al ruteador */
+            padding: 20px; /* Más espacio interno para amplitud */
+            margin-bottom: 20px; /* Más separación entre bloques */
+            border: 1px solid var(--border);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.03);
+            /* Implementación 1: Forzar alineación y ancho completo uniforme para todos los bloques */
+            width: 100%;
+            display: block;
+            margin-left: 0;
+            margin-right: 0;
+            box-sizing: border-box;
+            clear: both;
+            overflow-x: hidden;
+        }
+
+        .informe-wrapper .section-ephemeral { background: var(--temp); border-style: dashed; border-color: #94a3b8; }
+        
+        .informe-wrapper .section-header {
+            color: var(--primary);
+            font-size: 0.95rem; /* Letra un poco más grande */
+            font-weight: 900;
+            border-bottom: 2px solid var(--primary-light);
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .informe-wrapper .config-icon { cursor: pointer; font-size: 1.2rem; color: #9ca3af; transition: color 0.2s; }
+        .informe-wrapper .config-icon:hover { color: var(--primary); }
+        
+        /* Grilla actualizada: Fuerza que los inputs ocupen el 100% del ancho en celulares */
+        .informe-wrapper .grid { display: grid; gap: 15px; grid-template-columns: 1fr; }
+        @media (min-width: 600px) { .informe-wrapper .grid-2 { grid-template-columns: 1fr 1fr; } }
+        
+        .informe-wrapper .field { display: flex; flex-direction: column; margin-bottom: 8px; position: relative; }
+
+        .informe-wrapper label {
+            font-size: 0.75rem;
+            font-weight: 800;
+            margin-bottom: 6px;
+            color: #4b5563;
+            text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .informe-wrapper .stock-badge {
+            font-size: 0.55rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-weight: 900;
+        }
+        .informe-wrapper .stock-ok { background: #dcfce7; color: #16a34a; }
+        .informe-wrapper .stock-none { background: #fee2e2; color: #dc2626; }
+        .informe-wrapper .stock-used { background: #fef9c3; color: #ca8a04; border: 1px solid #facc15; }
+
+        /* Cuadros de texto mucho más amplios */
+        .informe-wrapper input, .informe-wrapper textarea, .informe-wrapper select {
+            padding: 15px; /* Aumentado para mayor área de toque */
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 1.05rem; /* Texto más grande y legible */
+            background: #f9fafb;
+            width: 100%;
+            outline: none;
+            color: var(--text);
+            transition: all 0.2s ease;
+        }
+
+        .informe-wrapper input:focus, .informe-wrapper select:focus, .informe-wrapper textarea:focus { 
+            border-color: var(--primary); 
+            background: var(--white);
+            box-shadow: 0 0 0 3px var(--primary-light); /* Resalte moderno al escribir */
+        }
+        
+        .informe-wrapper .important { border: 2px solid var(--accent); font-weight: bold; background: #f0f9ff; }
+        .informe-wrapper textarea { resize: vertical; min-height: 100px; }
+
+        .informe-wrapper .chips-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .informe-wrapper .chip {
+            background: var(--primary-light);
+            color: var(--primary);
+            border: 1px solid var(--primary);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: all 0.1s;
+        }
+        .informe-wrapper .chip:active { background: var(--primary); color: white; }
+
+        /* Botones unificados con aspecto más robusto */
+        .informe-wrapper .btn-group { display: flex; flex-direction: column; gap: 12px; margin: 25px 0; }
+        .informe-wrapper button {
+            padding: 18px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 900;
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        .informe-wrapper button:active { transform: scale(0.98); }
+
+        .informe-wrapper .btn-copy { background: var(--primary); color: white; box-shadow: 0 4px 6px rgba(0, 91, 159, 0.2); }
+        .informe-wrapper .btn-reset { background: #e5e7eb; color: #4b5563; }
+        .informe-wrapper .btn-excel { background: var(--success); color: white; margin-top: 15px; box-shadow: 0 4px 6px rgba(22, 163, 74, 0.2); }
+        
+        .informe-wrapper .btn-inventory { background: var(--primary); color: white; font-size: 0.85rem; padding: 14px; flex: 1; }
+        .informe-wrapper .btn-template { background: #e5e7eb; color: #4b5563; font-size: 0.8rem; padding: 14px; flex: 1; }
+        .informe-wrapper .btn-manage-serials { background: var(--accent-yellow); color: var(--primary); font-size: 0.85rem; padding: 15px; margin-top: 12px; width: 100%; box-shadow: 0 4px 6px rgba(255, 204, 0, 0.2); }
+        .informe-wrapper .btn-danger-all { background: var(--error); color: white; margin-top: 10px; box-shadow: 0 4px 6px rgba(220, 38, 38, 0.2); }
+        
+        .informe-wrapper .btn-scan {
+            background: var(--primary);
+            color: white;
+            border-radius: 8px;
+            padding: 0 20px;
+            font-size: 1.2rem;
+            margin-left: 8px;
+            height: 100%;
+        }
+
+        .informe-wrapper .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            padding: 20px;
+        }
+        .informe-wrapper .modal {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            max-width: 450px;
+            width: 100%;
+            text-align: center;
+            border-top: 8px solid var(--warning);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .informe-wrapper .modal h2 { color: var(--primary); margin-top: 0; font-size: 1.2rem; text-transform: uppercase; }
+        .informe-wrapper .modal-btns { display: flex; gap: 10px; flex-direction: column; margin-top: 20px; }
+        .informe-wrapper .btn-back { background: #cfd8dc; color: #37474f; }
+        .informe-wrapper .btn-save-config { background: var(--primary); color: white; }
+        .informe-wrapper .btn-confirm-delete { background: var(--error); color: white; }
+
+        .informe-wrapper .history {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 25px;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+        }
+
+        .informe-wrapper table { width: 100%; border-collapse: collapse; font-size: 0.7rem; }
+        .informe-wrapper th, .informe-wrapper td { padding: 12px 10px; border-bottom: 1px solid #eee; text-align: left; }
+        .informe-wrapper th { background: #f8f9fa; color: var(--primary); text-transform: uppercase; }
+
+        .informe-wrapper .status-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.6rem;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+        .informe-wrapper .status-pending { background: #eee; color: #666; }
+        .informe-wrapper .status-completed { background: #c8e6c9; color: #2e7d32; }
+
+        .informe-wrapper .action-btns { display: flex; gap: 6px; }
+        .informe-wrapper .btn-action { background: none; border: none; padding: 6px; font-size: 1rem; cursor: pointer; border-radius: 4px; }
+        .informe-wrapper .edit-btn { color: var(--primary); background: #e3f2fd; }
+        .informe-wrapper .complete-btn { color: var(--success); background: #e8f5e9; }
+        .informe-wrapper .delete-btn { color: var(--error); background: #ffebee; }
+
+        .informe-wrapper .inventory-list {
+            max-height: 120px;
+            overflow-y: auto;
+            font-size: 0.65rem;
+            text-align: left;
+            margin-top: 10px;
+            border: 1px solid #eee;
+            padding: 8px;
+            background: white;
+            border-radius: 6px;
+        }
+        .informe-wrapper .blacklist-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+        .informe-wrapper .btn-liberate {
+            background: var(--error);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-weight: bold;
+        }
+
+        .toast-inf {
+            position: fixed;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #263238;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 30px;
+            display: none;
+            z-index: 3000;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .informe-wrapper #fileStock { display: none; }
+        
+        .informe-wrapper .scanner-container {
+            position: relative; 
+            width: 100%; 
+            height: 250px; 
+            background: #000; 
+            border-radius: 8px; 
+            overflow: hidden; 
+            margin-bottom: 15px;
+        }
+        .informe-wrapper .scanner-target {
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            width: 80%; 
+            height: 40%; 
+            border: 2px solid #00ff00; 
+            box-sizing: border-box; 
+            box-shadow: 0 0 0 4000px rgba(0,0,0,0.5);
+            pointer-events: none;
+        }
+        
+        /* ==========================================
+           AJUSTES LEAFLET Y ETIQUETAS (MEJORADOS)
+           ========================================== */
+        .leaflet-popup-content-wrapper { 
+            border-radius: 12px; 
+            box-shadow: 0 5px 25px rgba(0,0,0,0.25); 
+        }
+        .leaflet-popup-content { 
+            margin: 12px; 
+            line-height: 1.4; 
+        }
+        
+        .eeq-label {
+            background-color: white;
+            color: #005b9f;
+            border: none;
+            border-radius: 6px;
+            font-weight: 800;
+            font-size: 11px;
+            padding: 4px 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.15);
+            white-space: nowrap;
+        }
+        .eeq-label-completed {
+            background-color: #f3f4f6;
+            color: #6b7280;
+        }
+        .eeq-label-cluster {
+            background-color: #ffcc00;
+            color: #0033a0;
+            font-size: 12px;
+            box-shadow: 0 4px 10px rgba(255, 204, 0, 0.4);
+        }
+        
+        .leaflet-tooltip-top:before { border-top-color: white; }
+        .eeq-label-completed.leaflet-tooltip-top:before { border-top-color: #f3f4f6; }
+        .eeq-label-cluster.leaflet-tooltip-top:before { border-top-color: #ffcc00; }
+        
+        .custom-cluster-wrapper {
+            background: transparent;
+            border: none;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .popup-scrollable::-webkit-scrollbar { width: 4px; }
+        .popup-scrollable::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px;}
+        .popup-scrollable::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px;}
+        .popup-scrollable::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+    </style>
+</head>
+<body>
+
+    <!-- ==========================================
+         VISTA 1: RUTEADOR GPS
+         ========================================== -->
+    <div id="view-ruteador" class="view-container active">
+        <!-- Header Ruteador -->
+        <header class="bg-eeq-blue text-white p-4 shadow-md flex items-center justify-between flex-shrink-0 z-10 relative">
+            <div class="flex items-center gap-3">
+                <div class="bg-white p-1 rounded-full w-10 h-10 flex items-center justify-center shadow-inner">
+                    <i class="fa-solid fa-bolt text-eeq-light text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight m-0 text-white">Ruteador GPS</h1>
+                    <p class="text-xs text-blue-200 flex items-center gap-1 mt-0.5 m-0">
+                        Operativo EEQ 
+                        <span class="ml-2 bg-green-600 px-2 py-0.5 rounded-full text-[10px] whitespace-nowrap font-bold">
+                            <i class="fa-solid fa-sd-card"></i> 100% Local
+                        </span>
+                    </p>
+                </div>
+            </div>
+            <button onclick="window.clearAll()" class="bg-purple-600 hover:bg-purple-700 p-2 rounded-lg text-sm transition-colors shadow-sm text-white">
+                <i class="fa-solid fa-trash-can mr-1"></i> Borrar Todo
+            </button>
+        </header>
+
+        <!-- Toolbar Adicional con Mapa -->
+        <div class="bg-white px-4 py-2 flex justify-between items-center shadow-sm border-b border-gray-200 z-0">
+            <span class="text-sm font-semibold text-gray-600">Exportar Rutas GPS:</span>
+            <div class="flex gap-2">
+                <button onclick="openMapViewer()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm">
+                    <i class="fa-solid fa-map-location-dot"></i> Mapa
+                </button>
+                <!-- Implementación 3: Botón GPX Grupal Negro -->
+                <button onclick="downloadGlobalGPX()" class="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm">
+                    <i class="fa-solid fa-file-export"></i> GPX Grupal
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <main class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+            
+            <!-- Upload Zone -->
+            <div id="drop-zone" class="border-2 border-dashed border-eeq-light bg-blue-50 rounded-xl p-6 text-center cursor-pointer hover:bg-blue-100 transition-colors relative" onclick="document.getElementById('file-input').click()">
+                <input type="file" id="file-input" class="hidden" accept=".pdf, image/*" multiple onchange="window.handleFiles(this.files)">
+                <i class="fa-solid fa-camera mb-2 text-4xl text-eeq-light"></i>
+                <h2 class="font-bold text-eeq-blue m-0">Toca para cargar Órdenes</h2>
+                <p class="text-sm text-gray-500 mt-1 m-0">Sube PDFs, Fotos o Capturas de Pantalla</p>
+                
+                <!-- Loading Overlay -->
+                <div id="loading-overlay" class="hidden absolute inset-0 bg-white/90 rounded-xl flex flex-col items-center justify-center z-10">
+                    <div class="loader mb-2"></div>
+                    <p id="loading-text" class="text-sm font-semibold text-eeq-blue text-center px-4 m-0">Procesando documento...</p>
+                </div>
+            </div>
+
+            <!-- Estadísticas -->
+            <div class="flex justify-between bg-white p-3 rounded-lg shadow-sm border border-gray-100 items-center">
+                <span class="text-sm text-gray-500 font-medium">Rutas Pendientes:</span>
+                <span id="order-count" class="font-bold text-white bg-eeq-light px-3 py-1 rounded-full text-sm shadow-sm">0</span>
+            </div>
+
+            <!-- Mensaje vacío -->
+            <div id="empty-state" class="text-center py-10 text-gray-400">
+                <i class="fa-regular fa-folder-open text-4xl mb-3 opacity-50"></i>
+                <p class="m-0">Tu lista de trabajo está vacía.<br>Sube documentos para iniciar.</p>
+            </div>
+
+            <!-- Lista de Órdenes -->
+            <div id="orders-container" class="flex flex-col gap-3">
+                <!-- Las tarjetas se inyectarán aquí -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal del Mapa Interactivo -->
+    <div id="map-modal" class="hidden fixed inset-0 bg-white z-[2500] flex-col">
+        <header class="bg-eeq-blue text-white p-4 shadow-md flex justify-between items-center z-10 relative">
+            <h2 class="font-bold text-lg m-0"><i class="fa-solid fa-map"></i> Mapa Operativo</h2>
+            <button onclick="closeMapViewer()" class="bg-purple-600 hover:bg-purple-700 p-2 rounded-lg text-sm text-white shadow-sm transition-colors">
+                <i class="fa-solid fa-xmark"></i> Cerrar
+            </button>
+        </header>
+        <!-- Contenedor donde Leaflet inyectará el mapa -->
+        <div id="map-container" class="flex-1 w-full relative z-0"></div>
+    </div>
+
+    <!-- ==========================================
+         VISTA 2: INFORME 21 / RECLAMO TÉCNICO
+         ========================================== -->
+    <div id="view-informe" class="view-container informe-wrapper">
+        <div class="container-inf">
+            <header>
+                <h1>Gestión Técnica Operativa - Informe</h1>
+            </header>
+
+            <!-- CONTROL DE INVENTARIO -->
+            <div class="report-section" style="background: #f8f9fb; border-top: 4px solid #546e7a;">
+                <div class="section-header">Control de Inventario (Excel)</div>
+                <div style="display: flex; gap: 8px; margin-bottom: 5px;">
+                    <button type="button" class="btn-inventory" onclick="document.getElementById('fileStock').click()">
+                        📂 CARGAR EXCEL
+                    </button>
+                    <button type="button" class="btn-template" onclick="downloadInventoryTemplate()">
+                        📥 PLANTILLA
+                    </button>
+                </div>
+                <button type="button" class="btn-manage-serials" onclick="openBlacklistModal()">
+                    🛡️ ADMINISTRAR SERIALES REGISTRADOS
+                </button>
+                <input type="file" id="fileStock" accept=".xlsx, .xls" onchange="handleStockUpload(this)">
+                <input type="file" id="fallbackCamera" accept="image/*" capture="environment" style="display: none;" onchange="handleFallbackCamera(this)">
+                <div id="stockStatus" style="font-size: 0.7rem; color: #546e7a; font-weight: bold; margin-top: 8px;">
+                    Sincronizando inventario local...
+                </div>
+                <div id="materialStockList" class="inventory-list"></div>
+            </div>
+
+            <div id="editIndicator" class="edit-mode-indicator">Modo Edición Activado</div>
+
+            <form id="reportForm">
+                <input type="hidden" id="editing_id">
+
+                <!-- CONTROL ADMINISTRATIVO -->
+                <div class="report-section" style="border-left: 5px solid var(--accent);">
+                    <div class="section-header">Control Administrativo</div>
+                    
+                    <div class="field" style="margin-bottom: 12px;">
+                        <label for="tipo_informe" style="color: var(--primary);">TIPO DE ORDEN / INFORME</label>
+                        <select id="tipo_informe" style="font-weight: 800; color: var(--primary); background-color: #f0f7ff;" onchange="toggleReportType()">
+                            <option value="ESTANDAR">INFORME ESTÁNDAR (INFORME OT)</option>
+                            <option value="RECLAMO">RECLAMO TÉCNICO</option>
+                            <option value="INSP">INSPECCIÓN INSP</option>
+                        </select>
+                    </div>
+
+                    <div class="field">
+                        <label for="db_orden">N° DE ORDEN (OT)</label>
+                        <input type="text" id="db_orden" class="important" placeholder="Identificador OT">
+                    </div>
+                </div>
+
+                <!-- REFERENCIA LOGÍSTICA -->
+                <!-- Implementación 2: Se añade style="display: none;" para ocultar el bloque visualmente -->
+                <div class="report-section section-ephemeral" style="display: none;">
+                    <div class="section-header">Referencia Logística (Uso Interno)</div>
+                    <div class="grid grid-2">
+                        <div class="field"><label for="temp_direccion">Dirección</label><input type="text" id="temp_direccion"></div>
+                        <div class="field"><label for="temp_telefono">Teléfono</label><input type="tel" id="temp_telefono"></div>
+                    </div>
+                    <div class="field" style="margin-top:10px">
+                        <label for="db_estado_final">Tratamiento / Ejecución</label>
+                        <select id="db_estado_final">
+                            <option value="Pendiente">PENDIENTE (EN PROCESO)</option>
+                            <option value="Culminado">CULMINADO / INFORMADO</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- INFO GENERAL (Tiempos) -->
+                <div class="report-section">
+                    <div class="section-header">Tiempos y Atención</div>
+                    <div class="grid grid-2">
+                        <div class="field"><label for="db_fecha">Fecha</label><input type="date" id="db_fecha"></div>
+                        <div class="field"><label for="db_atiende">Atiende</label><input type="text" id="db_atiende"></div>
+                        <div class="field"><label for="db_h_inicio">Hora Inicio</label><input type="time" id="db_h_inicio"></div>
+                        <div class="field"><label for="db_h_fin">Hora Fin</label><input type="time" id="db_h_fin"></div>
+                    </div>
+                </div>
+
+                <!-- 1. INFORME TÉCNICO -->
+                <div class="report-section">
+                    <div class="section-header" id="title_inf_tec">
+                        1. INFORME TÉCNICO
+                        <span class="config-icon" onclick="openConfigModal('activity')" title="Configurar actividades estándar">⚙️</span>
+                    </div>
+                    <div id="activityChipsContainer" class="chips-container"></div>
+                    <div class="field">
+                        <label for="db_inf_tec">Descripción del Trabajo Realizado</label>
+                        <textarea id="db_inf_tec" placeholder="Describa la tarea técnica..."></textarea>
+                    </div>
+                </div>
+
+                <!-- 2. VOLTAJES -->
+                <div class="report-section">
+                    <div class="section-header" id="title_voltajes">2. VOLTAJES MEDIDOS</div>
+                    <div class="grid grid-2">
+                        <div class="field"><label for="db_v_l1n">(L1–N)</label><input type="text" inputmode="decimal" id="db_v_l1n"></div>
+                        <div class="field"><label for="db_v_l2n">(L2–N)</label><input type="text" inputmode="decimal" id="db_v_l2n"></div>
+                        <div class="field"><label for="db_v_l3n">(L3–N)</label><input type="text" inputmode="decimal" id="db_v_l3n"></div>
+                        <div class="field"><label for="db_v_l1l2">(L1–L2)</label><input type="text" inputmode="decimal" id="db_v_l1l2"></div>
+                        <div class="field"><label for="db_v_l2l3">(L2–L3)</label><input type="text" inputmode="decimal" id="db_v_l2l3"></div>
+                        <div class="field"><label for="db_v_l1l3">(L1–L3)</label><input type="text" inputmode="decimal" id="db_v_l1l3"></div>
+                    </div>
+                </div>
+
+                <!-- BLOQUE EXCLUSIVO INSPECCIÓN INSP -->
+                <div id="insp_sections" style="display: none;">
+                    <div class="report-section">
+                        <div class="section-header">1. DATOS DEL SERVICIO OCASIONAL</div>
+                        <div class="field mb-2"><label for="insp_nombre_evento">NOMBRE DEL EVENTO</label><input type="text" id="insp_nombre_evento" placeholder="Ej: Concierto, Feria..."></div>
+                        <div class="grid grid-2 mb-2">
+                            <div class="field"><label for="insp_desde">DESDE</label><input type="date" id="insp_desde"></div>
+                            <div class="field"><label for="insp_hasta">HASTA</label><input type="date" id="insp_hasta"></div>
+                        </div>
+                        <div class="field"><label for="insp_horario">HORARIO</label><input type="text" id="insp_horario" placeholder="Ej: 18:00 a 23:00"></div>
+                    </div>
+                </div>
+
+                <!-- BLOQUE EXCLUSIVO RECLAMO TÉCNICO -->
+                <div id="reclamo_sections" style="display: none;">
+                    <div class="report-section">
+                        <div class="section-header">3. VERIFICACIÓN DE CONECTORES</div>
+                        <div class="field"><input type="text" id="rec_conectores" placeholder="Estado de conectores..."></div>
+                    </div>
+                    <div class="report-section">
+                        <div class="section-header">4. VERIFICACIÓN DE ACOMETIDA</div>
+                        <div class="field"><input type="text" id="rec_acometida" placeholder="Estado de acometida..."></div>
+                    </div>
+                    <div class="report-section">
+                        <div class="section-header">5. VERIFICACIÓN CAJA DE DISTRIBUCIÓN</div>
+                        <div class="field"><input type="text" id="rec_caja_dist" placeholder="Estado de caja de distribución..."></div>
+                    </div>
+                    <div class="report-section">
+                        <div class="section-header">6. VERIFICACIÓN DEL ESTADO FISICO MEDIDOR</div>
+                        <div class="field"><input type="text" id="rec_estado_medidor" placeholder="Estado físico del medidor..."></div>
+                    </div>
+                    <div class="report-section">
+                        <div class="section-header">7. VERIFICACION DE DISYUNTORES</div>
+                        <div class="field"><input type="text" id="rec_disyuntores" placeholder="Estado de disyuntores..."></div>
+                    </div>
+                    <div class="report-section">
+                        <div class="section-header">8. REVISION DE PUESTA A TIERRA</div>
+                        <div class="field"><input type="text" id="rec_puesta_tierra" placeholder="Revisión de puesta a tierra..."></div>
+                    </div>
+                    <div class="report-section">
+                        <div class="section-header">9. INFORMACION ADICIONAL</div>
+                        <div class="field mb-2">
+                            <label for="rec_info_adicional">Información General</label>
+                            <textarea id="rec_info_adicional" placeholder="Información adicional..."></textarea>
+                        </div>
+                        <div class="field">
+                            <label for="rec_artefactos">Artefactos dañados</label>
+                            <textarea id="rec_artefactos" placeholder="Lista de artefactos dañados..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- BLOQUE EXCLUSIVO INSPECCIÓN INSP (Carga) -->
+                <div id="insp_carga_section" class="report-section" style="display: none;">
+                    <div class="section-header">4. CARGA DECLARADA</div>
+                    <div class="field mb-2"><label for="insp_carga">CARGA DECLARADA</label><textarea id="insp_carga" placeholder="Detalle de la carga..."></textarea></div>
+                    <div class="field"><label for="insp_carga_total">TOTAL</label><input type="text" id="insp_carga_total" placeholder="Ej: 15 kW"></div>
+                    <input type="hidden" id="insp_nota_estatica" value="SI LA CARGA DECLARADA VARÍA Y SOBREPASA LA CAPACIDAD NOMINAL QUE SOPORTAN LAS DIFERENTES PARTES DE LA INSTALACIÓN, Y ESTO OCASIONA DAÑOS EN LA RED DE DISTRIBUCIÓN DE BAJA TENSIÓN, LA RESPONSABILIDAD SERÁ EXCLUSIVA DEL CLIENTE. FIRMA DE RESPONSABILIDAD: EN HOJA DE FORMATO">
+                    <p style="font-size: 0.65rem; color: #555; margin-top: 8px; font-weight: bold; line-height: 1.4;">
+                        NOTA: SI LA CARGA DECLARADA VARÍA Y SOBREPASA LA CAPACIDAD NOMINAL QUE SOPORTAN LAS DIFERENTES PARTES DE LA INSTALACIÓN, Y ESTO OCASIONA DAÑOS EN LA RED DE DISTRIBUCIÓN DE BAJA TENSIÓN, LA RESPONSABILIDAD SERÁ EXCLUSIVA DEL CLIENTE.<br>FIRMA DE RESPONSABILIDAD: EN HOJA DE FORMATO (Se adjuntará al reporte)
+                    </p>
+                </div>
+
+                <!-- MATERIALES UTILIZADOS -->
+                <div class="report-section">
+                    <div class="section-header" id="title_materiales">
+                        <span id="num_materiales">3.</span> MATERIALES UTILIZADOS
+                        <span class="config-icon" onclick="openConfigModal('material')" title="Configurar lista de materiales">⚙️</span>
+                    </div>
+                    <p id="nota_materiales_reclamo" style="display:none; color: var(--error); font-size: 0.75rem; font-weight: bold; margin-bottom: 10px;">
+                        DE UTILIZAR SE GENERARA OT INTE PARA DESCARGO DE MATERIAL.
+                    </p>
+                    <div id="matChipsContainer" class="chips-container"></div>
+                    <div class="field">
+                        <label for="db_materiales">Lista de Materiales</label>
+                        <textarea id="db_materiales" placeholder="Lista automática..."></textarea>
+                    </div>
+                    <div id="sellos_container" class="grid grid-2" style="margin-top: 10px;">
+                        <div class="field">
+                            <label for="db_sello_bor">Sello Bornera <span id="stk_db_sello_bor" class="stock-badge"></span></label>
+                            <input type="text" id="db_sello_bor" class="stock-check">
+                        </div>
+                        <div class="field">
+                            <label for="db_sello_cah">Sello CAH <span id="stk_db_sello_cah" class="stock-badge"></span></label>
+                            <input type="text" id="db_sello_cah" class="stock-check">
+                        </div>
+                        <div class="field" style="grid-column: 1/-1;">
+                            <label for="db_sello_dist">Sello C. Distribución <span id="stk_db_sello_dist" class="stock-badge"></span></label>
+                            <input type="text" id="db_sello_dist" class="stock-check">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MEDIDOR RETIRADO -->
+                <div class="report-section" id="section_med_ret">
+                    <div class="section-header"><span id="num_med_ret">4.</span> MEDIDOR RETIRADO O EXISTENTE</div>
+                    <div class="field"><label for="db_ret_num">N° Medidor</label><input type="text" id="db_ret_num"></div>
+                    <div class="grid grid-2">
+                        <div class="field"><label for="db_ret_lec">Lectura</label><input type="text" inputmode="decimal" id="db_ret_lec"></div>
+                        
+                        <!-- FASE 1 UI: Selects ocultos y Botones Toggles Inyectados -->
+                        <div class="field">
+                            <label for="db_ret_bor">Bornera</label>
+                            <select id="db_ret_bor" style="display: none;"><option value="">--</option><option value="BIEN">BIEN</option><option value="MAL">MAL</option></select>
+                            <div class="flex gap-2 mt-1">
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="BIEN" onclick="window.setToggleValue('db_ret_bor', 'BIEN')">BIEN</button>
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="MAL" onclick="window.setToggleValue('db_ret_bor', 'MAL')">MAL</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="db_ret_car">Carcasa</label>
+                            <select id="db_ret_car" style="display: none;"><option value="">--</option><option value="BIEN">BIEN</option><option value="MAL">MAL</option></select>
+                            <div class="flex gap-2 mt-1">
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="BIEN" onclick="window.setToggleValue('db_ret_car', 'BIEN')">BIEN</button>
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="MAL" onclick="window.setToggleValue('db_ret_car', 'MAL')">MAL</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="db_ret_reg">Registrador</label>
+                            <select id="db_ret_reg" style="display: none;"><option value="">--</option><option value="BIEN">BIEN</option><option value="MAL">MAL</option></select>
+                            <div class="flex gap-2 mt-1">
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="BIEN" onclick="window.setToggleValue('db_ret_reg', 'BIEN')">BIEN</button>
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="MAL" onclick="window.setToggleValue('db_ret_reg', 'MAL')">MAL</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="db_ret_tapa">Tapa Bornera</label>
+                            <select id="db_ret_tapa" style="display: none;"><option value="">--</option><option value="SI">SI</option><option value="NO">NO</option></select>
+                            <div class="flex gap-2 mt-1">
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="SI" onclick="window.setToggleValue('db_ret_tapa', 'SI')">SI</button>
+                                <button type="button" class="btn-toggle flex-1 py-3 px-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-500 bg-gray-100 transition-colors" data-val="NO" onclick="window.setToggleValue('db_ret_tapa', 'NO')">NO</button>
+                            </div>
+                        </div>
+                        
+                        <div class="field">
+                            <label for="db_ret_sellos">Sellos</label>
+                            <select id="db_ret_sellos">
+                                <option value="">-- Seleccionar --</option>
+                                <option value="POR VERIFICAR">POR VERIFICAR</option>
+                                <option value="INTEGROS">INTEGROS</option>
+                                <option value="VIOLENTADOS">VIOLENTADOS</option>
+                                <option value="SIN SELLOS">SIN SELLOS</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MEDIDOR NUEVO -->
+                <div class="report-section" id="section_med_new">
+                    <div class="section-header"><span id="num_med_new">5.</span> MEDIDOR NUEVO</div>
+                    <div class="grid grid-2">
+                        <div class="field">
+                            <label for="db_new_num">N° Medidor Nuevo <span id="stk_db_new_num" class="stock-badge"></span></label>
+                            <div style="display: flex; height: 46px;">
+                                <input type="text" id="db_new_num" class="stock-check" style="flex: 1;">
+                                <button type="button" class="btn-scan" onclick="startScanner('db_new_num')" title="Escanear Código de Barras">📷</button>
+                            </div>
+                        </div>
+                        <div class="field"><label for="db_new_lec">Lectura Inicial</label><input type="text" inputmode="decimal" id="db_new_lec"></div>
+                    </div>
+                </div>
+
+                <!-- EJECUTADO POR -->
+                <div class="report-section">
+                    <div class="section-header">
+                        <span id="num_ejecutado">6.</span> EJECUTADO POR
+                        <span class="config-icon" onclick="openConfigModal('tech')" title="Configurar lista de técnicos">⚙️</span>
+                    </div>
+                    <div id="techChipsContainer" class="chips-container"></div>
+                    <input type="text" id="db_ejecutado" placeholder="Responsables de la ejecución...">
+                </div>
+
+                <div class="btn-group">
+                    <button type="button" class="btn-copy" id="mainBtn" onclick="validateAndProcess()">COPIAR E INSCRIBIR REPORTE</button>
+                    <button type="button" class="btn-reset" onclick="resetManual()">LIMPIAR FORMULARIO</button>
+                </div>
+            </form>
+
+            <div class="history">
+                <div class="section-header">Historial de Órdenes (Informe)</div>
+                <table id="logTable">
+                    <thead><tr><th>OT</th><th>Medidor</th><th>Estado</th><th>Acciones</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <button type="button" class="btn-excel" onclick="exportToExcel()">EXPORTAR A EXCEL (.XLSX)</button>
+                <button type="button" class="btn-danger-all" onclick="openDeleteAllModal()">BORRAR TODO EL REGISTRO</button>
+            </div>
+        </div>
+
+        <!-- Modales Sistema (Informe) -->
+        <div id="scannerModal" class="modal-overlay">
+            <div class="modal">
+                <h2 style="color: var(--primary)">Escanear Código</h2>
+                <div class="scanner-container">
+                    <video id="scannerVideo" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
+                    <div class="scanner-target"></div>
+                </div>
+                <p style="font-size: 0.75rem; color: #666; margin-bottom: 15px;">Apunta la cámara al código de barras del medidor.</p>
+                <div class="modal-btns">
+                    <button type="button" class="btn-back" onclick="stopScanner()">CANCELAR</button>
+                </div>
+            </div>
+        </div>
+        <div id="alarmModal" class="modal-overlay">
+            <div class="modal">
+                <div style="font-size: 3rem;">⚠️</div>
+                <h2 style="color: var(--error)">ALERTA DE MATERIALES</h2>
+                <p id="alarmMsg"></p>
+                <div class="modal-btns">
+                    <button class="btn-copy" onclick="goToMaterials()">SÍ, REVISAR</button>
+                    <button class="btn-ignore btn-back" onclick="forceProcess()">NO, CONTINUAR ASÍ</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="qtyModal" class="modal-overlay">
+            <div class="modal">
+                <h2 style="color: var(--primary)">Cantidad Requerida</h2>
+                <p id="qtyModalItemName" style="font-weight: bold; margin: 10px 0;"></p>
+                <input type="number" id="qtyInput" inputmode="numeric" style="text-align: center; font-size: 1.5rem; padding: 15px;">
+                <input type="hidden" id="qtyTargetName">
+                <input type="hidden" id="qtyTargetType">
+                <div class="modal-btns">
+                    <button class="btn-save-config" onclick="confirmQtyEntry()">CONFIRMAR</button>
+                    <button class="btn-back" onclick="closeModal('qtyModal')">CANCELAR</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="blacklistModal" class="modal-overlay">
+            <div class="modal">
+                <h2>Seriales Registrados</h2>
+                <div id="blacklistActions" style="margin-bottom: 15px; border-bottom: 2px solid #eee; padding-bottom: 10px;">
+                    <button class="btn-liberate" style="width:100%; height:45px; background:var(--error);" onclick="startBulkLiberationProtocol()">
+                        🗑️ BORRAR TODO EL REGISTRO PERMANENTE
+                    </button>
+                </div>
+                <div id="blacklistContainer" style="max-height: 300px; overflow-y: auto; text-align: left; border: 1px solid #eee; border-radius: 8px;"></div>
+                <div class="modal-btns"><button class="btn-back" onclick="closeModal('blacklistModal')">CERRAR</button></div>
+            </div>
+        </div>
+
+        <div id="liberateVerifyModal" class="modal-overlay">
+            <div class="modal" style="border-top: 8px solid var(--error);">
+                <h2 style="color: var(--error)">PROTOCOLO DE LIBERACIÓN</h2>
+                <p>Desbloqueando serial: <span id="verifySerialName" style="font-weight: bold;"></span></p>
+                <p style="font-size: 0.8rem; margin: 10px 0;">Escriba <strong>ELIMINAR SERIAL</strong> para confirmar:</p>
+                <input type="text" id="liberateConfirmInput" placeholder="Confirmar frase..." style="text-align: center; border: 2px solid var(--error);">
+                <input type="hidden" id="targetSerialToLiberate">
+                <div class="modal-btns">
+                    <button class="btn-confirm-delete" onclick="executeProtocolLiberation()">CONFIRMAR</button>
+                    <button class="btn-back" onclick="closeModal('liberateVerifyModal')">CANCELAR</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="bulkLiberateVerifyModal" class="modal-overlay">
+            <div class="modal" style="border-top: 10px solid var(--error);">
+                <h2 style="color: var(--error)">⚠️ ADVERTENCIA DE SEGURIDAD ⚠️</h2>
+                <p>Está a punto de <b>BORRAR TODA LA MEMORIA</b> de seriales utilizados históricamente.</p>
+                <p style="font-size: 0.85rem; color: #d32f2f; margin: 15px 0; font-weight: bold;">Esta acción es irreversible y permitirá que cualquier serial usado en el pasado pueda ser registrado nuevamente.</p>
+                <p style="font-size: 0.8rem; margin: 10px 0;">Para proceder, escriba exactamente:<br><b style="color:var(--text)">BORRADO TOTAL DE ACTIVOS</b></p>
+                <input type="text" id="bulkLiberateConfirmInput" placeholder="Frase de seguridad..." style="text-align: center; border: 2px solid var(--error); width:100%;">
+                <div class="modal-btns">
+                    <button class="btn-confirm-delete" style="background:var(--error); height:50px;" onclick="executeBulkProtocolLiberation()">EJECUTAR LIMPIEZA TOTAL</button>
+                    <button class="btn-back" onclick="closeModal('bulkLiberateVerifyModal')">ABORTAR OPERACIÓN</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="configModal" class="modal-overlay">
+            <div class="modal">
+                <h2 id="configModalTitle">Configuración</h2>
+                <textarea id="configInput" style="min-height: 180px;"></textarea>
+                <input type="hidden" id="configTarget">
+                <div class="modal-btns">
+                    <button class="btn-save-config" onclick="saveGlobalConfig()">GUARDAR</button>
+                    <button class="btn-back" onclick="closeModal('configModal')">CERRAR</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="deleteModal" class="modal-overlay">
+            <div class="modal" style="border-top: 8px solid var(--error);">
+                <h2 style="color: var(--error)">BORRAR REGISTRO</h2>
+                <p>Se generará un respaldo antes de borrar.</p>
+                <p style="font-size: 0.8rem; color: #666;">Archivo a respaldar: <span id="filenamePreview" style="font-weight:bold;"></span></p>
+                
+                <div class="modal-btns">
+                    <button class="btn-confirm-delete" onclick="executeSecureWipe()">RESPALDAR Y BORRAR</button>
+                    <button class="btn-back" onclick="closeModal('deleteModal')">CANCELAR</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="toast" class="toast-inf"></div>
+        <textarea id="clipboardBuffer" style="position:fixed;top:-999px"></textarea>
+    </div>
+
+    <!-- ==========================================
+         BARRA DE NAVEGACIÓN INFERIOR (TABS)
+         ========================================== -->
+    <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex justify-around p-1 z-50 shadow-[0_-2px_10px_rgba(0,0,0,0.1)]">
+        <button onclick="switchView('view-ruteador')" id="btn-nav-ruteador" class="flex flex-col items-center p-2 text-gray-400 w-1/2 rounded-lg hover:bg-gray-50 transition">
+            <i class="fa-solid fa-map-location-dot text-xl mb-1"></i>
+            <span class="text-xs font-bold">Ruteador GPS</span>
+        </button>
+        <button onclick="switchView('view-informe')" id="btn-nav-informe" class="flex flex-col items-center p-2 text-eeq-blue w-1/2 rounded-lg hover:bg-blue-50 transition">
+            <i class="fa-solid fa-file-signature text-xl mb-1"></i>
+            <span class="text-xs font-bold">Informe OT</span>
+        </button>
+    </div>
+
+    <!-- Modal Personalizado (Para el Ruteador) -->
+    <div id="custom-modal" class="hidden fixed inset-0 bg-black/50 z-[3000] flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 text-center transform transition-all">
+            <div id="modal-icon" class="text-4xl mb-4 text-eeq-blue">
+                <i class="fa-solid fa-circle-info"></i>
+            </div>
+            <h3 id="modal-title" class="text-lg font-bold text-gray-800 mb-2">Atención</h3>
+            <p id="modal-text" class="text-sm text-gray-600 mb-6">Mensaje</p>
+            <div class="flex gap-3 justify-center">
+                <button id="modal-cancel-btn" class="hidden px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors">Cancelar</button>
+                <button id="modal-confirm-btn" class="px-4 py-2 bg-eeq-blue hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         SCRIPTS: INTEGRACIÓN DE LÓGICAS
+         ========================================== -->
+    
+    <!-- SCRIPT 1: NAVEGACIÓN E INTEGRACIÓN -->
+    <script>
+        function switchView(viewId) {
+            document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
+            document.getElementById(viewId).classList.add('active');
+            
+            const btnRuteador = document.getElementById('btn-nav-ruteador');
+            const btnInforme = document.getElementById('btn-nav-informe');
+
+            if (viewId === 'view-ruteador') {
+                btnRuteador.classList.replace('text-gray-400', 'text-eeq-blue');
+                btnInforme.classList.replace('text-eeq-blue', 'text-gray-400');
+            } else {
+                btnInforme.classList.replace('text-gray-400', 'text-eeq-blue');
+                btnRuteador.classList.replace('text-eeq-blue', 'text-gray-400');
+            }
+        }
+
+        window.fillReport = function(orderNumber, medidorNumber) {
+            const inputOrden = document.getElementById('db_orden');
+            const inputMedRet = document.getElementById('db_ret_num');
+            
+            if (inputOrden) {
+                inputOrden.value = orderNumber;
+            }
+            
+            if (inputMedRet && medidorNumber && medidorNumber !== 'undefined' && medidorNumber !== 'null') {
+                inputMedRet.value = medidorNumber;
+            }
+            
+            if (window.saveDraft) window.saveDraft();
+            if (window.validateStockEntry && inputOrden) window.validateStockEntry(inputOrden);
+            
+            switchView('view-informe');
+            document.getElementById('view-informe').scrollTop = 0;
+            
+            if (window.showToast) window.showToast("✅ OT " + window.escapeHTML(orderNumber) + " vinculada.");
+        }
+    </script>
+
+    <!-- SCRIPT 2: LÓGICA DEL RUTEADOR Y MAPA -->
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+        proj4.defs("EPSG:32717","+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs");
+
+        window.extractedOrders = window.StorageManager.get('eeq_router_orders', []);
+        const dropZone = document.getElementById('drop-zone');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+
+        let localLeafletMap = null;
+
+        function saveRouterData() {
+            window.StorageManager.set('eeq_router_orders', window.extractedOrders);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            window.renderOrders();
+        });
+
+        window.openMapViewer = function() {
+            const validOrders = window.extractedOrders.filter(o => o.lat && o.lng);
+            if (validOrders.length === 0) {
+                return window.showModal("Atención", "No hay rutas con coordenadas válidas para mostrar en el mapa.");
+            }
+
+            const mapModal = document.getElementById('map-modal');
+            mapModal.classList.remove('hidden');
+            mapModal.classList.add('flex');
+
+            // FASE 1: Solución a Fugas de Memoria de Leaflet (Se inicializa una vez)
+            if (!localLeafletMap) {
+                localLeafletMap = L.map('map-container').setView([-0.22985, -78.52495], 12);
+                
+                // AJUSTE: Servidor de tiles más permisivo para uso local, compatible con la caché PWA offline
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', {
+                    maxZoom: 19,
+                    attribution: '© OpenStreetMap, © CARTO'
+                }).addTo(localLeafletMap);
+
+                window.markerClusterGroup = L.markerClusterGroup({
+                    maxClusterRadius: 40, 
+                    spiderfyOnMaxZoom: true, 
+                    showCoverageOnHover: false,
+                    zoomToBoundsOnClick: true,
+                    spiderfyDistanceMultiplier: 1.5, 
+                    iconCreateFunction: function(cluster) {
+                        const count = cluster.getChildCount();
+                        return L.divIcon({
+                            html: `<div class="eeq-label eeq-label-cluster">📦 ${count} Órdenes</div>`,
+                            className: 'custom-cluster-wrapper',
+                            iconSize: [85, 26]
+                        });
+                    }
+                });
+                localLeafletMap.addLayer(window.markerClusterGroup);
+            }
+
+            setTimeout(() => {
+                localLeafletMap.invalidateSize();
+                
+                // Limpiar clusters en lugar de destruir la capa
+                window.markerClusterGroup.clearLayers();
+                
+                let bounds = [];
+
+                validOrders.forEach(order => {
+                    const isCompleted = order.completed === true;
+                    const opacity = isCompleted ? 0.6 : 1.0;
+                    
+                    const marker = L.marker([order.lat, order.lng], { opacity: opacity });
+                    
+                    const labelClass = isCompleted ? 'eeq-label eeq-label-completed' : 'eeq-label';
+                    // FASE 1: Sanitizar inputs en el mapa
+                    const safeOrder = window.escapeHTML(order.order);
+                    const safeMedidor = window.escapeHTML(order.medidor || '');
+                    const safeSource = window.escapeHTML(order.source);
+
+                    marker.bindTooltip(safeOrder, {
+                        permanent: true,
+                        direction: 'top',
+                        offset: [0, -25],
+                        className: labelClass
+                    });
+
+                    const popupContent = `
+                        <div class="p-1 min-w-[150px] max-w-[220px]">
+                            <div class="text-center">
+                                <strong class="text-eeq-blue block mb-1 text-sm leading-tight">OT #${safeOrder}</strong>
+                                
+                                ${safeMedidor ? `<span class="text-xs font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded block w-max mx-auto mb-1">Med: ${safeMedidor}</span>` : ''}
+                                
+                                <div class="text-[9px] text-gray-500 bg-gray-50 p-1 rounded border border-gray-200 mb-1.5 truncate max-w-[180px] mx-auto" title="Archivo extraído: ${safeSource}">
+                                    <i class="fa-solid fa-file-pdf text-red-500 mr-1"></i>${safeSource}
+                                </div>
+                                
+                                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${isCompleted ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'} block mb-2 w-max mx-auto">
+                                    ${isCompleted ? '✅ Atendida' : '⏳ Pendiente'}
+                                </span>
+                                
+                                <div class="flex flex-col gap-1.5 mt-2">
+                                    <button onclick="unifiedFillReport('${order.order}', '${order.medidor || ''}', '${order.dbId}', ${isCompleted}, true)" class="bg-eeq-blue hover:bg-blue-700 text-white px-2 py-1.5 rounded text-xs w-full shadow-sm font-bold transition-colors flex items-center justify-center gap-1">
+                                        <i class="fa-solid fa-pen-to-square"></i> Llenar Informe
+                                    </button>
+                                    <button onclick="openWaze(${order.lat}, ${order.lng})" class="bg-[#33ccff] hover:bg-[#00bfff] text-white px-2 py-1.5 rounded text-xs w-full shadow-sm font-bold transition-colors flex items-center justify-center gap-1">
+                                        <i class="fa-brands fa-waze text-sm"></i> Ir con Waze
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                    marker.bindPopup(popupContent);
+                    window.markerClusterGroup.addLayer(marker);
+                    bounds.push([order.lat, order.lng]);
+                });
+
+                if (bounds.length > 0) {
+                    localLeafletMap.fitBounds(bounds, { padding: [40, 40] });
+                }
+            }, 250);
+        }
+
+        window.closeMapViewer = function() {
+            const mapModal = document.getElementById('map-modal');
+            mapModal.classList.add('hidden');
+            mapModal.classList.remove('flex');
+        }
+
+        window.showModal = function(title, text, type = 'alert', onConfirm = null) {
+            const modal = document.getElementById('custom-modal');
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-text').innerText = text;
+            const cancelBtn = document.getElementById('modal-cancel-btn');
+            const confirmBtn = document.getElementById('modal-confirm-btn');
+            const icon = document.getElementById('modal-icon');
+
+            if (type === 'confirm') {
+                cancelBtn.classList.remove('hidden');
+                icon.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-red-500"></i>';
+                confirmBtn.className = 'px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors shadow-sm';
+                confirmBtn.innerText = "Sí, Borrar Todo";
+            } else {
+                cancelBtn.classList.add('hidden');
+                icon.innerHTML = '<i class="fa-solid fa-circle-info text-eeq-blue"></i>';
+                confirmBtn.className = 'px-4 py-2 bg-eeq-blue hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm';
+                confirmBtn.innerText = "Aceptar";
+            }
+            modal.classList.remove('hidden');
+            const closeCustomModal = () => modal.classList.add('hidden');
+            cancelBtn.onclick = closeCustomModal;
+            confirmBtn.onclick = () => { closeCustomModal(); if (onConfirm) onConfirm(); };
+        }
+        
+        window.saveOrderToDB = function(orderData) {
+            orderData.dbId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+            window.extractedOrders.push(orderData);
+            saveRouterData();
+            window.renderOrders();
+        }
+
+        window.deleteOrder = function(dbId) {
+            window.extractedOrders = window.extractedOrders.filter(o => o.dbId !== dbId);
+            saveRouterData();
+            window.renderOrders();
+        }
+
+        window.toggleCompleted = function(dbId, currentStatus) {
+            const order = window.extractedOrders.find(o => o.dbId === dbId);
+            if (order) order.completed = !currentStatus;
+            saveRouterData();
+            window.renderOrders();
+        }
+
+        window.clearAll = function() {
+            window.showModal('Nueva Jornada', '¿Estás seguro de BORRAR TODAS las órdenes del ruteador? Esto limpiará permanentemente tu lista.', 'confirm', () => {
+                window.extractedOrders = [];
+                saveRouterData();
+                window.renderOrders();
+            });
+        }
+
+        window.handleFiles = async function(files) {
+            if (!files || files.length === 0) return;
+            showLoading("Iniciando lectura...");
+            let initialCount = window.extractedOrders.length;
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                try {
+                    if (file.type === 'application/pdf') await processPDF(file);
+                    else if (file.type.startsWith('image/')) await processImage(file);
+                    else window.showModal("Aviso", `El archivo ${window.escapeHTML(file.name)} no es compatible.`);
+                } catch (error) { window.showModal("Error", `Error al leer el archivo ${window.escapeHTML(file.name)}`); }
+            }
+            hideLoading();
+            setTimeout(() => {
+                if (window.extractedOrders.length === initialCount) {
+                    window.showModal("Revisión Necesaria", "Lectura completada, pero no se detectaron rutas nuevas.");
+                }
+            }, 500);
+        }
+
+        async function processPDF(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                showLoading(`Leyendo PDF (Pág. ${pageNum}/${pdf.numPages})...`);
+                const page = await pdf.getPage(pageNum);
+                const textContent = await page.getTextContent();
+                extractDataFromText(textContent.items.map(item => item.str).join(' '), `${file.name.substring(0, 15)} (Pág ${pageNum})`);
+            }
+        }
+
+        async function processImage(file) {
+            showLoading("Analizando imagen con IA (Puede tardar unos segundos)...");
+            const worker = await Tesseract.createWorker('spa');
+            const result = await worker.recognize(file);
+            await worker.terminate();
+            extractDataFromText(result.data.text, "Captura/Foto");
+        }
+
+        function extractDataFromText(rawText, source) {
+            const text = rawText.replace(/\n/g, ' ');
+            let orderNumber = "Desconocida", xVal = null, yVal = null, medidorVal = "";
+
+            // FASE 1: Regex con mayor tolerancia (fallback)
+            let matchOrder = text.match(/(?:No\.?\s*Orden|NUM\.?ORDEN|ORDEN\s*INTERNA)[\s:]*([0-9]{6,10})/i);
+            if (!matchOrder) matchOrder = text.match(/(?:OT|ORDEN)[\s\-\:]*([0-9]{6,10})\b/i);
+            
+            if (matchOrder && matchOrder[1]) orderNumber = matchOrder[1].trim();
+            else { const fallbackOrder = text.match(/\b([25]\d{7})\b/); if (fallbackOrder) orderNumber = fallbackOrder[1]; }
+
+            const matchX = text.match(/(?:COORDENADA[S]?\s*X)[\s:]*([\d\.\,]+)/i);
+            if (matchX && parseFloat(matchX[1]) > 10000) xVal = parseFloat(matchX[1].replace(/,/g, ''));
+            else { const fallbackX = text.match(/\b(7\d{5}(?:[\.\,]\d+)?)\b/); if (fallbackX) xVal = parseFloat(fallbackX[1].replace(/,/g, '')); }
+
+            const matchY = text.match(/(?:COORDENADA[S]?\s*Y)[\s:]*([\d\.\,]+)/i);
+            if (matchY && parseFloat(matchY[1]) > 10000) yVal = parseFloat(matchY[1].replace(/,/g, ''));
+            else { const fallbackY = text.match(/\b(99\d{5}(?:[\.\,]\d+)?)\b/); if (fallbackY) yVal = parseFloat(fallbackY[1].replace(/,/g, '')); }
+
+            const matchMedidor = text.match(/\b\d+\/([a-zA-Z0-9]+)\/[a-zA-Z0-9\-]+/i);
+            if (matchMedidor && matchMedidor[1]) {
+                medidorVal = matchMedidor[1];
+            }
+
+            if (xVal || yVal) {
+                let lat = null, lng = null;
+                if (xVal && yVal) {
+                    try {
+                        const converted = proj4("EPSG:32717", "EPSG:4326", [xVal, yVal]);
+                        lng = converted[0]; lat = converted[1];
+                    } catch (e) {
+                        console.warn("Error al convertir coordenadas UTM", e);
+                    }
+                }
+                const exists = window.extractedOrders.find(o => o.order === orderNumber);
+                if (exists) {
+                    exists.duplicateCount = (exists.duplicateCount || 1) + 1;
+                    if (!exists.medidor && medidorVal) exists.medidor = medidorVal; 
+                    saveRouterData();
+                    window.renderOrders(); 
+                } else {
+                    window.saveOrderToDB({ 
+                        order: orderNumber, 
+                        medidor: medidorVal, 
+                        x: xVal, 
+                        y: yVal, 
+                        lat: lat, 
+                        lng: lng, 
+                        source: source, 
+                        completed: false, 
+                        duplicateCount: 1 
+                    });
+                }
+            }
+        }
+
+        window.renderOrders = function() {
+            const ordersContainer = document.getElementById('orders-container');
+            const emptyState = document.getElementById('empty-state');
+            ordersContainer.innerHTML = '';
+            document.getElementById('order-count').innerText = window.extractedOrders.filter(o => !o.completed).length;
+
+            if (window.extractedOrders.length === 0) {
+                emptyState.classList.remove('hidden');
+                ordersContainer.classList.add('hidden');
+                return;
+            }
+            emptyState.classList.add('hidden');
+            ordersContainer.classList.remove('hidden');
+
+            window.extractedOrders.forEach((order, index) => {
+                const card = document.createElement('div');
+                const isCompleted = order.completed === true;
+                const completedClass = isCompleted ? "opacity-60 bg-gray-50" : "bg-white";
+                card.className = `${completedClass} rounded-xl shadow-sm border ${isCompleted ? 'border-green-300' : 'border-gray-200'} overflow-hidden slide-in relative transition-all duration-300`;
+                card.style.animationDelay = `${index * 0.03}s`;
+                
+                const hasValidCoords = order.lat !== null && order.lng !== null;
+                const statusBadge = hasValidCoords 
+                    ? `<span class="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full font-medium"><i class="fa-solid fa-check-circle mr-1"></i>Válido</span>`
+                    : `<span class="bg-red-100 text-red-700 text-xs px-2 py-1 rounded-full font-medium"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Incompleto</span>`;
+
+                // FASE 1: Sanitización de Datos
+                const safeOrder = window.escapeHTML(order.order);
+                const safeSource = window.escapeHTML(order.source);
+                const safeMedidor = window.escapeHTML(order.medidor || '');
+
+                card.innerHTML = `
+                    ${isCompleted ? `<div class="absolute top-0 right-0 bg-green-500 text-white text-[10px] font-bold px-2 py-1 rounded-bl-lg shadow-sm z-10"><i class="fa-solid fa-check mr-1"></i>ATENDIDA</div>` : ``}
+                    <div class="p-4 border-b border-gray-100 mt-2">
+                        <div class="flex justify-between items-start mb-2">
+                            <div class="flex items-center gap-3">
+                                <button onclick="toggleCompleted('${order.dbId}', ${isCompleted})" class="${isCompleted ? 'text-green-500' : 'text-gray-300 hover:text-green-500'} transition-colors text-2xl">
+                                    <i class="${isCompleted ? 'fa-solid fa-circle-check' : 'fa-regular fa-circle-check'}"></i>
+                                </button>
+                                <div>
+                                    <h3 class="font-bold ${isCompleted ? 'text-gray-500 line-through' : 'text-gray-800'} text-lg leading-tight">
+                                        Orden: #${safeOrder} ${(order.duplicateCount && order.duplicateCount > 1) ? `<span class="bg-purple-100 text-purple-700 border border-purple-300 px-1.5 py-0.5 rounded-md text-[10px] ml-2 font-bold uppercase no-underline shadow-sm">Repetida (x${order.duplicateCount})</span>` : ``}
+                                    </h3>
+                                    <p class="text-[11px] text-gray-400 mt-1">
+                                        <i class="fa-solid fa-file-lines mr-1"></i>${safeSource}
+                                        ${safeMedidor ? `<br><span class="text-eeq-blue font-bold mt-1 inline-block"><i class="fa-solid fa-gauge mr-1"></i>Med: ${safeMedidor}</span>` : ''}
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="flex flex-col items-end gap-2">
+                                ${statusBadge}
+                                <button onclick="deleteOrder('${order.dbId}')" class="text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 p-1.5 rounded-lg transition-colors"><i class="fa-solid fa-trash-can text-sm"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-blue-50/50 p-2 grid grid-cols-4 gap-2">
+                        <button onclick="unifiedFillReport('${order.order}', '${order.medidor || ''}', '${order.dbId}', ${isCompleted}, false)" class="flex items-center justify-center gap-1 bg-eeq-blue hover:bg-blue-700 text-white py-2 px-1 rounded-lg font-medium shadow-sm text-[11px] sm:text-sm">
+                            <i class="fa-solid fa-pen-to-square"></i> Llenar
+                        </button>
+                        <button onclick="openMaps(${order.lat}, ${order.lng})" ${!hasValidCoords ? 'disabled' : ''} class="flex items-center justify-center gap-1 bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 py-2 px-1 rounded-lg font-medium disabled:opacity-50 shadow-sm text-[11px] sm:text-sm">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/a/aa/Google_Maps_icon_%282020%29.svg" class="w-3 h-3 sm:w-4 sm:h-4"> Maps
+                        </button>
+                        <button onclick="openWaze(${order.lat}, ${order.lng})" ${!hasValidCoords ? 'disabled' : ''} class="flex items-center justify-center gap-1 bg-[#33ccff] hover:bg-[#00bfff] text-white py-2 px-1 rounded-lg font-medium disabled:opacity-50 shadow-sm text-[11px] sm:text-sm">
+                            <i class="fa-brands fa-waze text-sm sm:text-lg"></i> Waze
+                        </button>
+                        <!-- Implementación 3: Botón GPX Individual Negro -->
+                        <button onclick="downloadSingleGPX('${order.dbId}')" ${!hasValidCoords ? 'disabled' : ''} class="flex items-center justify-center gap-1 bg-black hover:bg-gray-800 text-white py-2 px-1 rounded-lg font-medium disabled:opacity-50 shadow-sm text-[11px] sm:text-sm">
+                            <i class="fa-solid fa-download text-sm"></i> GPX
+                        </button>
+                    </div>
+                `;
+                ordersContainer.appendChild(card);
+            });
+        }
+
+        window.openMaps = function(lat, lng) { if(lat && lng) window.open(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`, '_blank'); }
+        window.openWaze = function(lat, lng) { if(lat && lng) window.open(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`, '_blank'); }
+
+        window.downloadGlobalGPX = function() {
+            const validOrders = window.extractedOrders.filter(o => o.lat && o.lng && !o.completed);
+            if (validOrders.length === 0) return window.showModal("Aviso", "No hay rutas pendientes por exportar.");
+            let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Ruteador EEQ">\n`;
+            validOrders.forEach(o => { gpx += `  <wpt lat="${o.lat}" lon="${o.lng}">\n    <name>Orden ${window.escapeHTML(o.order)}</name>\n    <desc>Fuente: ${window.escapeHTML(o.source)}</desc>\n  </wpt>\n`; });
+            gpx += `</gpx>`;
+            triggerDownload(gpx, `Rutas_EEQ_Pendientes_${new Date().getTime()}.gpx`);
+        }
+
+        // --- NUEVA CAPA AUXILIAR: SINCRONIZACIÓN DE BOTONES LLENAR ---
+        window.unifiedFillReport = function(order, medidor, dbId, isCompleted, fromMap) {
+            // 1. Si el clic viene del mapa, cerramos el modal limpiamente
+            if (fromMap) {
+                window.closeMapViewer();
+            }
+            
+            // 2. Si la orden NO estaba completada, disparamos tu función original
+            // que la marca como completada y re-renderiza la lista principal.
+            if (!isCompleted) {
+                window.toggleCompleted(dbId, false);
+            }
+            
+            // 3. Finalmente, ejecutamos la redirección al informe intacta.
+            window.fillReport(order, medidor);
+        }
+        // -------------------------------------------------------------
+
+        // --- NUEVA CAPA AUXILIAR: GPX INDIVIDUAL ---
+        window.downloadSingleGPX = function(dbId) {
+            const order = window.extractedOrders.find(o => o.dbId === dbId);
+            if (!order || !order.lat || !order.lng) return window.showToast("❌ Sin coordenadas válidas.");
+            
+            let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Ruteador EEQ">\n`;
+            gpx += `  <wpt lat="${order.lat}" lon="${order.lng}">\n    <name>Orden ${window.escapeHTML(order.order)}</name>\n    <desc>Fuente: ${window.escapeHTML(order.source)}</desc>\n  </wpt>\n`;
+            gpx += `</gpx>`;
+            triggerDownload(gpx, `Ruta_OT_${order.order}.gpx`);
+        }
+        // -------------------------------------------
+
+        function triggerDownload(content, filename) {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([content], { type: 'application/gpx+xml' }));
+            a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        }
+
+        function showLoading(text) { loadingText.innerText = text; loadingOverlay.classList.remove('hidden'); }
+        function hideLoading() { loadingOverlay.classList.add('hidden'); document.getElementById('file-input').value = ""; }
+
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-eeq-blue', 'bg-blue-100'); });
+        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('border-eeq-blue', 'bg-blue-100'); });
+        dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('border-eeq-blue', 'bg-blue-100'); if(e.dataTransfer.files.length > 0) window.handleFiles(e.dataTransfer.files); });
+
+        const style = document.createElement('style');
+        style.textContent = `@keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } } .slide-in { animation: slideIn 0.3s ease-out forwards; opacity: 0; }`;
+        document.head.appendChild(style);
+    </script>
+
+    <!-- SCRIPT 3: LÓGICA DEL INFORME 21 / RECLAMO TÉCNICO -->
+    <script>
+        const keywords = ["alambrado", "cableado", "disyuntor", "breaker", "termico", "bipolar", "conector", "rp", "acometida", "cambio", "salidas", "puentes", "puente", "salida", "termicos", "disyuntores", "caja", "medidor"];
+        
+        // CONFIGURACIÓN PARA INFORME ESTÁNDAR
+        const configMapEstandar = [
+            { section: "FECHA DE EJECUCIÓN", fields: { "FECHA": "db_fecha", "ATIENDE": "db_atiende", "HORA INICIO": "db_h_inicio", "HORA FIN": "db_h_fin" } },
+            { section: "1. INFORME TÉCNICO", fields: { "DESCRIPCIÓN": "db_inf_tec" } },
+            { section: "2. VOLTAJES MEDIDOS:", fields: { "L1-N": "db_v_l1n", "L2-N": "db_v_l2n", "L3-N": "db_v_l3n", "L1-L2": "db_v_l1l2", "L2-L3": "db_v_l2l3", "L1-L3": "db_v_l1l3" } },
+            { section: "3. MATERIALES UTILIZADOS:", fields: { "MATERIALES": "db_materiales", "N° SELLO BORNERA": "db_sello_bor", "N° SELLO CAH": "db_sello_cah", "N° SELLO C. DISTRIBUCIÓN": "db_sello_dist" } },
+            { section: "4. N° MEDIDOR RETIRADO O EXISTENTE:", fields: { "N° MEDIDOR": "db_ret_num", "LECTURA": "db_ret_lec", "BORNERA": "db_ret_bor", "CARCASA": "db_ret_car", "REGISTRADOR": "db_ret_reg", "TAPA DE BORNERA": "db_ret_tapa", "SELLOS": "db_ret_sellos" } },
+            { section: "5. N° MEDIDOR NUEVO:", fields: { "N° MEDIDOR": "db_new_num", "LECTURA": "db_new_lec" } },
+            { section: "6. EJECUTADO POR:", fields: { "TECNICOS": "db_ejecutado" } }
+        ];
+
+        // CONFIGURACIÓN PARA RECLAMO TÉCNICO
+        const configMapReclamo = [
+            { section: "FECHA DE EJECUCIÓN", fields: { "FECHA": "db_fecha", "HORA INICIO": "db_h_inicio", "HORA FIN": "db_h_fin", "ATIENDE": "db_atiende" } },
+            { section: "1. INFORME TÉCNICO", fields: { "DESCRIPCIÓN": "db_inf_tec" } },
+            { section: "2. VOLTAJES MEDIDOS:", fields: { "VOLTAJE (L1–N)": "db_v_l1n", "VOLTAJE (L2–N)": "db_v_l2n", "VOLTAJE (L3–N)": "db_v_l3n", "VOLTAJE ENTRE FASES (L1–L2)": "db_v_l1l2", "VOLTAJE ENTRE FASES (L2–L3)": "db_v_l2l3", "VOLTAJE ENTRE FASES (L1–L3)": "db_v_l1l3" } },
+            { section: "3. VERIFICACIÓN DE CONECTORES:", fields: { "ESTADO": "rec_conectores" } },
+            { section: "4. VERIFICACIÓN DE ACOMETIDA:", fields: { "ESTADO": "rec_acometida" } },
+            { section: "5. VERIFICACIÓN CAJA DE DISTRIBUCIÓN:", fields: { "ESTADO": "rec_caja_dist" } },
+            { section: "6. VERIFICACIÓN DEL ESTADO FISICO MEDIDOR:", fields: { "ESTADO": "rec_estado_medidor" } },
+            { section: "7. VERIFICACION DE DISYUNTORES:", fields: { "ESTADO": "rec_disyuntores" } },
+            { section: "8. REVISION DE PUESTA A TIERRA:", fields: { "ESTADO": "rec_puesta_tierra" } },
+            { section: "9. INFORMACION ADICIONAL:", fields: { "GENERAL": "rec_info_adicional", "Artefactos dañados": "rec_artefactos" } },
+            { section: "10. MATERIALES UTILIZADOS:\nDE UTILIZAR SE GENERARA OT INTE PARA DESCARGO DE MATERIAL.", fields: { "MATERIALES": "db_materiales", "N° SELLO BORNERA": "db_sello_bor", "N° SELLO CAH": "db_sello_cah", "N° SELLO C. DISTRIBUCIÓN": "db_sello_dist" } },
+            { section: "11. N° MEDIDOR RETIRADO O EXISTENTE:", fields: { "N° MEDIDOR": "db_ret_num", "LECTURA": "db_ret_lec", "BORNERA": "db_ret_bor", "CARCAZA": "db_ret_car", "REGISTRADOR": "db_ret_reg", "TAPA DE BORNERA": "db_ret_tapa", "SELLOS": "db_ret_sellos" } },
+            { section: "12. N° MEDIDOR NUEVO:", fields: { "N° MEDIDOR": "db_new_num", "LECTURA": "db_new_lec" } },
+            { section: "13. EJECUTADO POR:", fields: { "TECNICOS": "db_ejecutado" } }
+        ];
+
+        // CONFIGURACIÓN PARA INSPECCIÓN INSP
+        const configMapInsp = [
+            { section: "FECHA DE EJECUCIÓN", fields: { "FECHA": "db_fecha", "HORA INICIO": "db_h_inicio", "HORA FIN": "db_h_fin", "ATIENDE": "db_atiende" } },
+            { section: "1. DATOS DEL SERVICIO OCASIONAL", fields: { "NOMBRE DEL EVENTO": "insp_nombre_evento", "DESDE": "insp_desde", "HASTA": "insp_hasta", "HORARIO": "insp_horario" } },
+            { section: "2. INFORME", fields: { "DESCRIPCIÓN": "db_inf_tec" } },
+            { section: "3. VOLTAJES MEDIDOS:", fields: { "VOLTAJE (L1–N)": "db_v_l1n", "VOLTAJE (L2–N)": "db_v_l2n", "VOLTAJE (L3–N)": "db_v_l3n", "VOLTAJE ENTRE FASES (L1–L2)": "db_v_l1l2", "VOLTAJE ENTRE FASES (L2–L3)": "db_v_l2l3", "VOLTAJE ENTRE FASES (L1–L3)": "db_v_l1l3" } },
+            { section: "4. CARGA DECLARADA:", fields: { "CARGA": "insp_carga", "TOTAL": "insp_carga_total", "NOTA": "insp_nota_estatica" } },
+            { section: "5. MATERIALES PREVISTOS PARA LA INSTALACIÓN:", fields: { "MATERIALES": "db_materiales" } },
+            { section: "6. EJECUTADO POR:", fields: { "TECNICOS": "db_ejecutado" } }
+        ];
+
+        // --- MEJORA: FORMATO WHATSAPP LIMPIO, ORDENADO Y CON UNIDADES ---
+        window.buildWhatsAppText = function(log) {
+            // Usaremos un arreglo de "bloques" para garantizar que NO haya dobles espacios irregulares.
+            // Al final, uniremos todos los bloques con exactamente '\n\n' (una línea en blanco de separación).
+            let parts = []; 
+            
+            // --- ENCABEZADO ---
+            let header = [`N° DE ORDEN: ${log.OT}`];
+            let subHeader = [];
+            if (log.FECHA) subHeader.push(`FECHA: ${log.FECHA}`);
+            if (log.H_INICIO) subHeader.push(`HORA INICIO: ${log.H_INICIO}`);
+            if (log.H_FIN) subHeader.push(`HORA FIN: ${log.H_FIN}`);
+            
+            // IMPLEMENTACIÓN ÚNICA: Cambio de etiqueta de "ATENDIDO POR:" a "ATIENDE:"
+            if (log.ATIENDE) subHeader.push(`ATIENDE: ${log.ATIENDE}`);
+            
+            if (subHeader.length > 0) {
+                parts.push(header.join('\n'));
+                parts.push(subHeader.join('\n'));
+            } else {
+                parts.push(header.join('\n'));
+            }
+            
+            // --- 1. INFORME TÉCNICO ---
+            if (log.INF_TECNICO && log.INF_TECNICO.trim() !== "") {
+                parts.push(`1. INFORME TÉCNICO:\n${log.INF_TECNICO.trim()}`);
+            }
+            
+            // --- 2. VOLTAJES MEDIDOS ---
+            if (log.V_L1N || log.V_L2N || log.V_L3N || log.V_L1L2 || log.V_L2L3 || log.V_L1L3) {
+                let volts = [`2. VOLTAJES MEDIDOS:`];
+                if (log.V_L1N) volts.push(`L1-N: ${log.V_L1N} [V]`);
+                if (log.V_L2N) volts.push(`L2-N: ${log.V_L2N} [V]`);
+                if (log.V_L3N) volts.push(`L3-N: ${log.V_L3N} [V]`);
+                if (log.V_L1L2) volts.push(`L1-L2: ${log.V_L1L2} [V]`);
+                if (log.V_L2L3) volts.push(`L2-L3: ${log.V_L2L3} [V]`);
+                if (log.V_L1L3) volts.push(`L1-L3: ${log.V_L1L3} [V]`);
+                parts.push(volts.join('\n'));
+            }
+            
+            // --- 3. MATERIALES UTILIZADOS ---
+            if (log.MATERIALES && log.MATERIALES.trim() !== "") {
+                let mats = [`3. MATERIALES UTILIZADOS:`];
+                log.MATERIALES.split('\n').filter(m => m.trim() !== "").forEach(m => mats.push(`- ${m.trim()}`));
+                parts.push(mats.join('\n'));
+            }
+            
+            // --- 4. MEDIDOR EXISTENTE Y/O RETIRADO ---
+            let sec4 = [];
+            if (log.MED_RET) sec4.push(`N°: ${log.MED_RET}`);
+            if (log.LEC_RET) sec4.push(`LECTURA: ${log.LEC_RET}`);
+            
+            let sec4Estado = [];
+            if (log.BORNERA && log.BORNERA !== "--") sec4Estado.push(`- Bornera: ${log.BORNERA}`);
+            if (log.CARCASA && log.CARCASA !== "--") sec4Estado.push(`- Carcasa: ${log.CARCASA}`);
+            if (log.REGISTRADOR && log.REGISTRADOR !== "--") sec4Estado.push(`- Registrador: ${log.REGISTRADOR}`);
+            if (log.TAPA && log.TAPA !== "--") sec4Estado.push(`- Tapa bornera: ${log.TAPA}`);
+            if (log.SELLOS_RET && log.SELLOS_RET !== "--") sec4Estado.push(`- Sellos: ${log.SELLOS_RET}`);
+            
+            if (sec4Estado.length > 0) {
+                if (sec4.length > 0) sec4.push(""); // Una línea de separación entre lectura y estado
+                sec4.push(sec4Estado.join('\n'));
+            }
+            
+            if (sec4.length > 0) {
+                parts.push(`4. MEDIDOR EXISTENTE Y/O RETIRADO:\n${sec4.join('\n')}`);
+            }
+            
+            // --- 5. MEDIDOR NUEVO ---
+            let sec5 = [];
+            if (log.MED_NEW) sec5.push(`N°: ${log.MED_NEW}`);
+            if (log.LEC_NEW) sec5.push(`LECTURA: ${log.LEC_NEW}`);
+            
+            if (sec5.length > 0) {
+                parts.push(`5. MEDIDOR NUEVO:\n${sec5.join('\n')}`);
+            }
+            
+            // --- 6. EJECUTADO POR ---
+            if (log.EJECUTADO && log.EJECUTADO.trim() !== "") {
+                parts.push(`6. EJECUTADO POR:\n${log.EJECUTADO.trim()}`);
+            }
+
+            // Bloque de seguridad: Añadir info extra en caso de RECLAMO/INSP sin alterar el núcleo
+            if (log.TIPO === 'RECLAMO') {
+                let rec = [`DATOS ADICIONALES (RECLAMO):`];
+                if (log.REC_CONECTORES) rec.push(`VERIFICACIÓN DE CONECTORES: ${log.REC_CONECTORES}`);
+                if (log.REC_ACOMETIDA) rec.push(`VERIFICACIÓN DE ACOMETIDA: ${log.REC_ACOMETIDA}`);
+                if (log.REC_CAJA) rec.push(`CAJA DE DISTRIBUCIÓN: ${log.REC_CAJA}`);
+                if (log.REC_EST_MED) rec.push(`ESTADO FISICO MEDIDOR: ${log.REC_EST_MED}`);
+                if (log.REC_DISY) rec.push(`VERIFICACION DE DISYUNTORES: ${log.REC_DISY}`);
+                if (log.REC_TIERRA) rec.push(`PUESTA A TIERRA: ${log.REC_TIERRA}`);
+                if (log.REC_INFO) rec.push(`INFORMACION ADICIONAL: ${log.REC_INFO}`);
+                if (log.REC_ART) rec.push(`ARTEFACTOS DAÑADOS: ${log.REC_ART}`);
+                
+                if (rec.length > 1) {
+                    parts.push(rec.join('\n'));
+                }
+            }
+            if (log.TIPO === 'INSP') {
+                let ins = [`DATOS ADICIONALES (INSPECCIÓN):`];
+                if (log.INSP_NOMBRE) ins.push(`NOMBRE DEL EVENTO: ${log.INSP_NOMBRE}`);
+                if (log.INSP_DESDE || log.INSP_HASTA) ins.push(`DESDE: ${log.INSP_DESDE || ""} HASTA: ${log.INSP_HASTA || ""}`);
+                if (log.INSP_HORARIO) ins.push(`HORARIO: ${log.INSP_HORARIO}`);
+                if (log.INSP_CARGA) ins.push(`CARGA DECLARADA: ${log.INSP_CARGA}`);
+                if (log.INSP_TOTAL) ins.push(`TOTAL: ${log.INSP_TOTAL}`);
+                
+                if (ins.length > 1) {
+                    parts.push(ins.join('\n'));
+                }
+            }
+
+            // Al unir todos los bloques ('parts') con exactamente '\n\n', 
+            // se eliminan matemáticamente los dobles espacios aleatorios e irregulares.
+            return parts.join('\n\n').trim();
+        }
+        // -------------------------------------------------------------
+
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshTable(); loadChips('tech'); loadChips('material'); loadChips('activity'); loadDraft(); updateStockInfo();
+            document.querySelectorAll('#reportForm input, #reportForm textarea, #reportForm select').forEach(el => {
+                el.addEventListener('input', (e) => { 
+                    window.saveDraft(); 
+                    if (e.target.classList.contains('stock-check')) window.validateStockEntry(e.target); 
+                });
+                el.addEventListener('change', window.saveDraft);
+            });
+        });
+
+        window.toggleReportType = function() {
+            const type = document.getElementById('tipo_informe').value;
+            const isReclamo = type === 'RECLAMO';
+            const isInsp = type === 'INSP';
+            const isEstandar = type === 'ESTANDAR';
+            
+            // Mostrar/Ocultar secciones exclusivas de Reclamo
+            document.getElementById('reclamo_sections').style.display = isReclamo ? 'block' : 'none';
+            document.getElementById('nota_materiales_reclamo').style.display = isReclamo ? 'block' : 'none';
+            
+            // Mostrar/Ocultar secciones exclusivas de INSP
+            if (document.getElementById('insp_sections')) document.getElementById('insp_sections').style.display = isInsp ? 'block' : 'none';
+            if (document.getElementById('insp_carga_section')) document.getElementById('insp_carga_section').style.display = isInsp ? 'block' : 'none';
+
+            // Mostrar/Ocultar Medidores y Sellos
+            if (document.getElementById('section_med_ret')) document.getElementById('section_med_ret').style.display = isInsp ? 'none' : 'block';
+            if (document.getElementById('section_med_new')) document.getElementById('section_med_new').style.display = isInsp ? 'none' : 'block';
+            if (document.getElementById('sellos_container')) document.getElementById('sellos_container').style.display = isInsp ? 'none' : 'grid';
+
+            // Actualizar numeración y títulos
+            if (isEstandar) {
+                if (document.getElementById('title_inf_tec')) document.getElementById('title_inf_tec').innerHTML = '1. INFORME TÉCNICO <span class="config-icon" onclick="openConfigModal(\'activity\')" title="Configurar actividades estándar">⚙️</span>';
+                if (document.getElementById('title_voltajes')) document.getElementById('title_voltajes').innerText = '2. VOLTAJES MEDIDOS';
+                if (document.getElementById('title_materiales')) document.getElementById('title_materiales').innerHTML = '<span id="num_materiales">3.</span> MATERIALES UTILIZADOS <span class="config-icon" onclick="openConfigModal(\'material\')" title="Configurar lista de materiales">⚙️</span>';
+                if (document.getElementById('num_med_ret')) document.getElementById('num_med_ret').innerText = '4.';
+                if (document.getElementById('num_med_new')) document.getElementById('num_med_new').innerText = '5.';
+                if (document.getElementById('num_ejecutado')) document.getElementById('num_ejecutado').innerText = '6.';
+            } else if (isReclamo) {
+                if (document.getElementById('title_inf_tec')) document.getElementById('title_inf_tec').innerHTML = '1. INFORME TÉCNICO <span class="config-icon" onclick="openConfigModal(\'activity\')" title="Configurar actividades estándar">⚙️</span>';
+                if (document.getElementById('title_voltajes')) document.getElementById('title_voltajes').innerText = '2. VOLTAJES MEDIDOS';
+                if (document.getElementById('title_materiales')) document.getElementById('title_materiales').innerHTML = '<span id="num_materiales">10.</span> MATERIALES UTILIZADOS <span class="config-icon" onclick="openConfigModal(\'material\')" title="Configurar lista de materiales">⚙️</span>';
+                if (document.getElementById('num_med_ret')) document.getElementById('num_med_ret').innerText = '11.';
+                if (document.getElementById('num_med_new')) document.getElementById('num_med_new').innerText = '12.';
+                if (document.getElementById('num_ejecutado')) document.getElementById('num_ejecutado').innerText = '13.';
+            } else if (isInsp) {
+                if (document.getElementById('title_inf_tec')) document.getElementById('title_inf_tec').innerHTML = '2. INFORME <span class="config-icon" onclick="openConfigModal(\'activity\')" title="Configurar actividades estándar">⚙️</span>';
+                if (document.getElementById('title_voltajes')) document.getElementById('title_voltajes').innerText = '3. VOLTAJES MEDIDOS';
+                if (document.getElementById('title_materiales')) document.getElementById('title_materiales').innerHTML = '5. MATERIALES PREVISTOS PARA LA INSTALACIÓN <span class="config-icon" onclick="openConfigModal(\'material\')" title="Configurar lista de materiales">⚙️</span>';
+                if (document.getElementById('num_ejecutado')) document.getElementById('num_ejecutado').innerText = '6.';
+            }
+            
+            window.saveDraft();
+        }
+
+        let scannerStream = null, scannerInterval = null, scanTargetId = null;
+
+        async function startScanner(targetId) {
+            scanTargetId = targetId;
+            if (!('BarcodeDetector' in window)) return window.showToast("❌ Tu navegador no soporta escáner nativo. Usa el teclado.");
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                document.getElementById('fallbackCamera').click();
+                return;
+            }
+            document.getElementById('scannerModal').style.display = 'flex';
+            const video = document.getElementById('scannerVideo');
+            try {
+                scannerStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                video.srcObject = scannerStream;
+                const barcodeDetector = new BarcodeDetector({ formats: ['code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'qr_code', 'upc_a', 'upc_e'] });
+                scannerInterval = setInterval(async () => {
+                    try {
+                        const barcodes = await barcodeDetector.detect(video);
+                        if (barcodes.length > 0) {
+                            const code = barcodes[0].rawValue;
+                            const inputEl = document.getElementById(scanTargetId);
+                            inputEl.value = code;
+                            window.validateStockEntry(inputEl);
+                            window.saveDraft();
+                            stopScanner();
+                            window.showToast("✅ CÓDIGO ESCANEADO");
+                        }
+                    } catch (e) {}
+                }, 500);
+            } catch (err) {
+                stopScanner();
+                document.getElementById('fallbackCamera').click();
+            }
+        }
+
+        function stopScanner() {
+            // FASE 1: Solución a posibles fugas de memoria del escáner
+            if (scannerInterval) {
+                clearInterval(scannerInterval);
+                scannerInterval = null;
+            }
+            if (scannerStream) {
+                scannerStream.getTracks().forEach(track => {
+                    try { track.stop(); } catch(e){}
+                });
+                scannerStream = null;
+            }
+            document.getElementById('scannerModal').style.display = 'none';
+        }
+
+        async function handleFallbackCamera(input) {
+            if (!input.files || input.files.length === 0) return;
+            window.showToast("⏳ LEYENDO CÓDIGO...");
+            const file = input.files[0];
+            const img = new Image();
+            img.onload = async () => {
+                try {
+                    const barcodeDetector = new BarcodeDetector({ formats: ['code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'qr_code', 'upc_a', 'upc_e'] });
+                    const barcodes = await barcodeDetector.detect(img);
+                    if (barcodes.length > 0) {
+                        const code = barcodes[0].rawValue;
+                        const inputEl = document.getElementById(scanTargetId);
+                        inputEl.value = code;
+                        window.validateStockEntry(inputEl);
+                        window.saveDraft();
+                        window.showToast("✅ CÓDIGO ESCANEADO");
+                    } else window.showToast("❌ NO SE DETECTÓ CÓDIGO EN LA FOTO.");
+                } catch (e) { window.showToast("❌ ERROR AL PROCESAR IMAGEN"); }
+                input.value = ""; 
+            };
+            img.src = URL.createObjectURL(file);
+        }
+
+        function goToMaterials() {
+            closeModal('alarmModal');
+            const matField = document.getElementById('db_materiales');
+            matField.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setTimeout(() => matField.focus(), 300);
+        }
+
+        function handleStockUpload(input) {
+            if (!input.files[0]) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const workbook = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                    const serials = [], consumables = {};
+                    jsonData.forEach(row => {
+                        const findVal = (terms) => { const key = Object.keys(row).find(k => terms.some(t => k.toUpperCase().includes(t))); return key ? row[key] : null; };
+                        const q = findVal(['CANTIDAD', 'STOCK', 'CANT']), materialName = findVal(['MATERIAL', 'DESCRIPCION', 'ITEM', 'NOMBRE', 'PRODUCTO']), serialValue = findVal(['SERIE', 'IDENTIFICADOR', 'ID', 'NUMERO', 'SERIAL', 'S/N']);
+                        if (q !== null && materialName !== null) consumables[materialName.toString().trim().toUpperCase()] = parseFloat(q);
+                        else if (serialValue !== null) serials.push(serialValue.toString().trim().toUpperCase());
+                    });
+                    window.StorageManager.set('tech_inventory_data', serials);
+                    window.StorageManager.set('tech_consumable_stock', consumables);
+                    const matList = Object.keys(consumables).join(', ');
+                    if (matList) { localStorage.setItem('material_list', matList); loadChips('material'); }
+                    updateStockInfo(); window.showToast("✅ INVENTARIO CARGADO"); 
+                    document.querySelectorAll('.stock-check').forEach(window.validateStockEntry);
+                } catch (err) { window.showToast("❌ ERROR AL PROCESAR EXCEL"); }
+            };
+            reader.readAsArrayBuffer(input.files[0]);
+        }
+
+        function downloadInventoryTemplate() {
+            const ws = XLSX.utils.json_to_sheet([{ "SERIE": "SN-001", "MATERIAL": "", "CANTIDAD": "" }, { "SERIE": "", "MATERIAL": "CABLE", "CANTIDAD": 100 }]);
+            const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Inventario");
+            XLSX.writeFile(wb, "plantilla_inventario.xlsx");
+        }
+
+        function updateStockInfo() {
+            const serials = window.StorageManager.get('tech_inventory_data', []);
+            const consumables = window.StorageManager.get('tech_consumable_stock', {});
+            const blacklist = window.StorageManager.get('tech_permanent_blacklist', {});
+            
+            // Sanitización aplicada al HTML dinámico
+            document.getElementById('stockStatus').innerHTML = `📦 ${serials.length} Stock | 🚫 ${Object.keys(blacklist).length} Registrados | 🛠️ ${Object.keys(consumables).length} Mat.`;
+            
+            const listDiv = document.getElementById('materialStockList'); 
+            listDiv.innerHTML = "";
+            for (const [n, q] of Object.entries(consumables)) {
+                const safeName = window.escapeHTML(n);
+                const safeQty = window.escapeHTML(q);
+                listDiv.innerHTML += `<div><strong>${safeName}:</strong> ${safeQty}</div>`;
+            }
+        }
+
+        function getUsedSerialsMap(currentOT = null) {
+            const blacklist = window.StorageManager.get('tech_permanent_blacklist', {}), blocked = [];
+            const normalizedOT = currentOT ? currentOT.trim().toUpperCase() : null;
+            for (const [serial, associatedOT] of Object.entries(blacklist)) {
+                if (associatedOT.toString().toUpperCase() !== normalizedOT) blocked.push(serial.toUpperCase());
+            }
+            return blocked;
+        }
+
+        window.validateStockEntry = function(el) {
+            const val = el.value.trim().toUpperCase(), badge = document.getElementById('stk_' + el.id); 
+            if (!badge) return;
+            if (val === "") { badge.innerText = ""; badge.className = "stock-badge"; return; }
+            const currentOT = document.getElementById('db_orden').value.trim().toUpperCase(), used = getUsedSerialsMap(currentOT), stock = window.StorageManager.get('tech_inventory_data', []);
+            if (used.includes(val)) { badge.innerText = "YA REGISTRADO"; badge.className = "stock-badge stock-used"; } 
+            else if (stock.includes(val)) { badge.innerText = "DISPONIBLE"; badge.className = "stock-badge stock-ok"; } 
+            else { badge.innerText = "NO EN STOCK"; badge.className = "stock-badge stock-none"; }
+        }
+
+        function openBlacklistModal() {
+            const bl = window.StorageManager.get('tech_permanent_blacklist', {});
+            const container = document.getElementById('blacklistContainer'); 
+            container.innerHTML = "";
+            
+            const entries = Object.entries(bl);
+            if (entries.length === 0) {
+                container.innerHTML = "<div style='padding:20px; text-align:center;'>Vacío.</div>";
+            } else {
+                entries.forEach(([s, otRef]) => { 
+                    // FASE 1: Prevención XSS en renderizado dinámico
+                    const safeS = window.escapeHTML(s);
+                    const safeRef = window.escapeHTML(otRef);
+                    container.innerHTML += `<div class="blacklist-item"><span><b>${safeS}</b> (OT: ${safeRef})</span><button class="btn-liberate" onclick="startLiberationProtocol('${safeS}')">LIBERAR</button></div>`; 
+                });
+            }
+            document.getElementById('blacklistModal').style.display = 'flex';
+        }
+
+        function startLiberationProtocol(s) { 
+            document.getElementById('verifySerialName').innerText = s; document.getElementById('targetSerialToLiberate').value = s;
+            document.getElementById('liberateConfirmInput').value = ""; document.getElementById('liberateVerifyModal').style.display = 'flex'; 
+        }
+
+        function executeProtocolLiberation() {
+            if (document.getElementById('liberateConfirmInput').value.trim().toUpperCase() !== "ELIMINAR SERIAL") return window.showToast("⚠️ TEXTO INCORRECTO");
+            let bl = window.StorageManager.get('tech_permanent_blacklist', {});
+            delete bl[document.getElementById('targetSerialToLiberate').value.toUpperCase()];
+            window.StorageManager.set('tech_permanent_blacklist', bl);
+            window.showToast("✅ SERIAL LIBERADO"); closeModal('liberateVerifyModal'); openBlacklistModal(); updateStockInfo();
+            document.querySelectorAll('.stock-check').forEach(window.validateStockEntry);
+        }
+
+        function startBulkLiberationProtocol() { document.getElementById('bulkLiberateConfirmInput').value = ""; document.getElementById('bulkLiberateVerifyModal').style.display = 'flex'; }
+
+        function executeBulkProtocolLiberation() {
+            if (document.getElementById('bulkLiberateConfirmInput').value.trim().toUpperCase() !== "BORRADO TOTAL DE ACTIVOS") return window.showToast("⚠️ FRASE DE SEGURIDAD INCORRECTA");
+            if (confirm("⚠️ ¿ESTÁ ABSOLUTAMENTE SEGURO? Esta acción borrará el registro permanente de TODOS los seriales usados.")) {
+                window.StorageManager.set('tech_permanent_blacklist', {});
+                window.showToast("🔥 MEMORIA DE SERIALES PURGADA"); closeModal('bulkLiberateVerifyModal'); openBlacklistModal(); updateStockInfo();
+                document.querySelectorAll('.stock-check').forEach(window.validateStockEntry);
+            }
+        }
+
+        function openConfigModal(type) {
+            const titles = { 'tech': "Técnicos", 'material': "Materiales", 'activity': "Actividades" }, keys = { 'tech': 'tech_list', 'material': 'material_list', 'activity': 'activity_list' }, defs = { 'tech': "A. TAPIA, A. JEREZ", 'material': "CABLE, CONECTOR RP", 'activity': "Cambio de # medidores" };
+            document.getElementById('configModalTitle').innerText = "CONFIGURAR " + titles[type].toUpperCase(); document.getElementById('configTarget').value = type;
+            document.getElementById('configInput').value = (localStorage.getItem(keys[type]) || defs[type]).split(',').map(t => t.trim()).join('\n');
+            document.getElementById('configModal').style.display = 'flex';
+        }
+
+        function saveGlobalConfig() {
+            const type = document.getElementById('configTarget').value, key = { 'tech': 'tech_list', 'material': 'material_list', 'activity': 'activity_list' }[type];
+            localStorage.setItem(key, document.getElementById('configInput').value.split(/[\n,]+/).map(t => t.trim()).filter(t => t !== "").join(', ')); 
+            loadChips(type); closeModal('configModal'); window.showToast("✅ ACTUALIZADO");
+        }
+
+        function loadChips(type) {
+            const conts = { 'tech': 'techChipsContainer', 'material': 'matChipsContainer', 'activity': 'activityChipsContainer' }, keys = { 'tech': 'tech_list', 'material': 'material_list', 'activity': 'activity_list' }, defs = { 'tech': "A. TAPIA, A. JEREZ", 'material': "CABLE, CONECTOR RP", 'activity': "Cambio de # medidores" }, container = document.getElementById(conts[type]); 
+            if (!container) return;
+            container.innerHTML = "";
+            (localStorage.getItem(keys[type]) || defs[type]).split(',').map(t => t.trim()).filter(t => t !== "").forEach(item => {
+                const chip = document.createElement('div'); chip.className = 'chip'; chip.innerText = item;
+                chip.onclick = () => { if (type === 'tech') addTech(item); else if (type === 'material') askQuantity(item, 'material'); else if (type === 'activity') addActivity(item); };
+                container.appendChild(chip);
+            });
+        }
+
+        function addTech(n) { const i = document.getElementById('db_ejecutado'); let c = i.value.trim(); i.value = c === "" ? n : (!c.includes(n) ? c + " / " + n : c); window.saveDraft(); }
+        function addActivity(n) { if (n.includes('#')) askQuantity(n, 'activity'); else insertActivityText(n); }
+        function insertActivityText(t) { const i = document.getElementById('db_inf_tec'); let c = i.value.trim(); i.value = c === "" ? t : (c.slice(-1) === "." || c.slice(-1) === "," ? c + " " + t : c + ". " + t); window.saveDraft(); }
+        function askQuantity(n, t) { document.getElementById('qtyModalItemName').innerText = n; document.getElementById('qtyTargetName').value = n; document.getElementById('qtyTargetType').value = t; document.getElementById('qtyInput').value = ""; document.getElementById('qtyModal').style.display = 'flex'; setTimeout(() => document.getElementById('qtyInput').focus(), 100); }
+
+        function confirmQtyEntry() {
+            const n = document.getElementById('qtyTargetName').value, t = document.getElementById('qtyTargetType').value, q = parseFloat(document.getElementById('qtyInput').value || "0");
+            if (t === 'material') {
+                const s = window.StorageManager.get('tech_consumable_stock', {});
+                if (s[n.toUpperCase()] !== undefined && s[n.toUpperCase()] < q) if (!confirm("Stock insuficiente. ¿Continuar?")) return;
+                const i = document.getElementById('db_materiales'); i.value = i.value.trim() === "" ? `${q} = ${n}` : i.value.trim() + "\n" + `${q} = ${n}`;
+            } else insertActivityText(n.replace('#', q));
+            closeModal('qtyModal'); window.saveDraft();
+        }
+
+        function validateAndProcess() {
+            const ot = document.getElementById('db_orden').value.trim(), eid = document.getElementById('editing_id').value;
+            if (!ot) return window.showToast("❌ OT REQUERIDA");
+            const logs = window.StorageManager.get('tech_db_final_v3', []);
+            if (logs.some(l => l.OT.toUpperCase() === ot.toUpperCase() && l.id !== eid)) return window.showToast("⚠️ OT EXISTE");
+            
+            const used = getUsedSerialsMap(ot);
+            for (let fid of ['db_new_num', 'db_sello_bor', 'db_sello_cah', 'db_sello_dist']) {
+                const v = document.getElementById(fid).value.trim().toUpperCase();
+                if (v !== "" && used.includes(v)) return window.showToast(`❌ BLOQUEADO: ${window.escapeHTML(v)} YA ESTÁ REGISTRADO EN OTRA ORDEN`);
+            }
+
+            const info = document.getElementById('db_inf_tec').value.toLowerCase(), mats = document.getElementById('db_materiales').value.trim(), found = keywords.filter(w => info.includes(w));
+            if (found.length > 0 && mats.length < 3) {
+                // Sanitizado el array encontrado antes de inyectar en DOM
+                const safeWords = found.slice(0,3).map(w => window.escapeHTML(w)).join(", ");
+                document.getElementById('alarmMsg').innerHTML = `El informe menciona <strong>${safeWords}</strong> pero materiales está vacío. ¿Desea revisar?`;
+                document.getElementById('alarmModal').style.display = 'flex';
+            } else processAll();
+        }
+
+        function processAll() {
+            const ot = document.getElementById('db_orden').value.trim();
+            const eid = document.getElementById('editing_id').value || Date.now().toString();
+            const curMats = document.getElementById('db_materiales').value;
+            const tipoInf = document.getElementById('tipo_informe').value;
+            
+            let logs = window.StorageManager.get('tech_db_final_v3', []), oldMats = "";
+            if (document.getElementById('editing_id').value) { const idx = logs.findIndex(l => l.id === eid); if (idx !== -1) oldMats = logs[idx].MATERIALES || ""; }
+            
+            const stock = window.StorageManager.get('tech_consumable_stock', {});
+            const parse = (t) => { const r = []; if(!t) return r; t.split('\n').forEach(l => { const p = l.split('='); if(p.length === 2) r.push({q: parseFloat(p[0]), n: p[1].trim().toUpperCase()}); }); return r; };
+            parse(oldMats).forEach(m => { if(stock[m.n] !== undefined) stock[m.n] += m.q; });
+            parse(curMats).forEach(m => { if(stock[m.n] !== undefined) stock[m.n] -= m.q; });
+            window.StorageManager.set('tech_consumable_stock', stock);
+
+            let bl = window.StorageManager.get('tech_permanent_blacklist', {});
+            [document.getElementById('db_new_num').value, document.getElementById('db_sello_bor').value, document.getElementById('db_sello_cah').value, document.getElementById('db_sello_dist').value].forEach(s => { const v = s.trim().toUpperCase(); if (v !== "") bl[v] = ot.toUpperCase(); });
+            window.StorageManager.set('tech_permanent_blacklist', bl);
+
+            const entry = { 
+                id: eid, OT: ot, TIPO: tipoInf,
+                FECHA: document.getElementById('db_fecha').value, 
+                ATIENDE: document.getElementById('db_atiende').value, 
+                H_INICIO: document.getElementById('db_h_inicio').value, 
+                H_FIN: document.getElementById('db_h_fin').value, 
+                INF_TECNICO: document.getElementById('db_inf_tec').value, 
+                MATERIALES: curMats, 
+                V_L1N: document.getElementById('db_v_l1n').value, 
+                V_L2N: document.getElementById('db_v_l2n').value, 
+                V_L3N: document.getElementById('db_v_l3n').value, 
+                V_L1L2: document.getElementById('db_v_l1l2').value, 
+                V_L2L3: document.getElementById('db_v_l2l3').value, 
+                V_L1L3: document.getElementById('db_v_l1l3').value, 
+                
+                // Campos Reclamo
+                REC_CONECTORES: document.getElementById('rec_conectores') ? document.getElementById('rec_conectores').value : "",
+                REC_ACOMETIDA: document.getElementById('rec_acometida') ? document.getElementById('rec_acometida').value : "",
+                REC_CAJA: document.getElementById('rec_caja_dist') ? document.getElementById('rec_caja_dist').value : "",
+                REC_EST_MED: document.getElementById('rec_estado_medidor') ? document.getElementById('rec_estado_medidor').value : "",
+                REC_DISY: document.getElementById('rec_disyuntores') ? document.getElementById('rec_disyuntores').value : "",
+                REC_TIERRA: document.getElementById('rec_puesta_tierra') ? document.getElementById('rec_puesta_tierra').value : "",
+                REC_INFO: document.getElementById('rec_info_adicional') ? document.getElementById('rec_info_adicional').value : "",
+                REC_ART: document.getElementById('rec_artefactos') ? document.getElementById('rec_artefactos').value : "",
+
+                // Campos INSP
+                INSP_NOMBRE: document.getElementById('insp_nombre_evento') ? document.getElementById('insp_nombre_evento').value : "",
+                INSP_DESDE: document.getElementById('insp_desde') ? document.getElementById('insp_desde').value : "",
+                INSP_HASTA: document.getElementById('insp_hasta') ? document.getElementById('insp_hasta').value : "",
+                INSP_HORARIO: document.getElementById('insp_horario') ? document.getElementById('insp_horario').value : "",
+                INSP_CARGA: document.getElementById('insp_carga') ? document.getElementById('insp_carga').value : "",
+                INSP_TOTAL: document.getElementById('insp_carga_total') ? document.getElementById('insp_carga_total').value : "",
+
+                SELLO_BOR: document.getElementById('db_sello_bor').value, 
+                SELLO_CAH: document.getElementById('db_sello_cah').value, 
+                SELLO_DIST: document.getElementById('db_sello_dist').value, 
+                MED_RET: document.getElementById('db_ret_num').value, 
+                LEC_RET: document.getElementById('db_ret_lec').value, 
+                BORNERA: document.getElementById('db_ret_bor').value, 
+                CARCASA: document.getElementById('db_ret_car').value, 
+                REGISTRADOR: document.getElementById('db_ret_reg').value, 
+                TAPA: document.getElementById('db_ret_tapa').value, 
+                SELLOS_RET: document.getElementById('db_ret_sellos').value, 
+                MED_NEW: document.getElementById('db_new_num').value, 
+                LEC_NEW: document.getElementById('db_new_lec').value, 
+                EJECUTADO: document.getElementById('db_ejecutado').value, 
+                _ESTADO: document.getElementById('db_estado_final').value, 
+                _DIR: document.getElementById('temp_direccion').value, 
+                _TEL: document.getElementById('temp_telefono').value 
+            };
+            
+            const existingIdx = logs.findIndex(l => l.id === eid);
+            if (existingIdx !== -1) logs[existingIdx] = entry; else logs.push(entry);
+            window.StorageManager.set('tech_db_final_v3', logs);
+
+            // MEJORA 2: Se usa la nueva función formateadora en lugar del bucle genérico
+            const textToCopy = window.buildWhatsAppText(entry);
+            
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(textToCopy).then(() => { window.showToast("✅ GUARDADO Y COPIADO"); }).catch(() => fallbackCopyTextToClipboard(textToCopy));
+            } else fallbackCopyTextToClipboard(textToCopy);
+
+            resetFormInternal(); refreshTable(); updateStockInfo(); 
+        }
+
+        function fallbackCopyTextToClipboard(text) {
+            const buf = document.getElementById('clipboardBuffer'); buf.value = text; buf.select(); buf.setSelectionRange(0, 99999);
+            try { document.execCommand('copy'); window.showToast("✅ GUARDADO CON ÉXITO"); } catch (err) { window.showToast("GUARDADO (No se pudo copiar)"); }
+        }
+
+        function refreshTable() {
+            const logs = window.StorageManager.get('tech_db_final_v3', []);
+            const tbody = document.querySelector('#logTable tbody'); tbody.innerHTML = "";
+            logs.slice().reverse().forEach(log => {
+                const sCl = log._ESTADO === 'Culminado' ? 'status-completed' : 'status-pending';
+                
+                // MEJORA VISUAL: Renderizado dinámico del icono según el estado
+                const btnIcon = log._ESTADO === 'Culminado' ? '✔️' : '❌';
+
+                // FASE 1: Prevención XSS en la Tabla
+                const safeOT = window.escapeHTML(log.OT);
+                const safeMed = window.escapeHTML(log.MED_RET || '-');
+                const safeEstado = window.escapeHTML(log._ESTADO || 'Pendiente');
+                const safeId = window.escapeHTML(log.id);
+
+                tbody.innerHTML += `<tr><td>${safeOT}</td><td>${safeMed}</td><td><span class="status-badge ${sCl}">${safeEstado}</span></td><td><div class="action-btns"><button class="btn-action complete-btn" onclick="toggleCompleteInf('${safeId}')">${btnIcon}</button><button class="btn-action edit-btn" onclick="editRecord('${safeId}')">✎</button><button class="btn-action delete-btn" onclick="deleteRecord('${safeId}')">🗑</button></div></td></tr>`;
+            });
+        }
+
+        function toggleCompleteInf(id) { 
+            let l = window.StorageManager.get('tech_db_final_v3', []); 
+            const i = l.findIndex(x => x.id === id); 
+            if (i !== -1) { 
+                const newState = l[i]._ESTADO === 'Culminado' ? 'Pendiente' : 'Culminado';
+                l[i]._ESTADO = newState; 
+                window.StorageManager.set('tech_db_final_v3', l); 
+                refreshTable(); 
+                
+                // MEJORA 1: Copiado automático integrado al botón Visto
+                if (newState === 'Culminado') {
+                    const textToCopy = window.buildWhatsAppText(l[i]);
+                    if (navigator.clipboard && window.isSecureContext) {
+                        navigator.clipboard.writeText(textToCopy)
+                        .then(() => { window.showToast("✅ CULMINADO Y COPIADO AL PORTAPAPELES"); })
+                        .catch(() => fallbackCopyTextToClipboard(textToCopy));
+                    } else fallbackCopyTextToClipboard(textToCopy);
+                }
+            } 
+        }
+
+        function editRecord(id) {
+            const r = window.StorageManager.get('tech_db_final_v3', []).find(x => x.id === id); if (!r) return;
+            document.getElementById('editing_id').value = r.id; 
+            document.getElementById('tipo_informe').value = r.TIPO || "ESTANDAR";
+            
+            document.getElementById('temp_direccion').value = r._DIR || ""; 
+            document.getElementById('temp_telefono').value = r._TEL || ""; 
+            document.getElementById('db_estado_final').value = r._ESTADO || "Pendiente"; 
+            document.getElementById('db_orden').value = r.OT; 
+            document.getElementById('db_fecha').value = r.FECHA; 
+            document.getElementById('db_atiende').value = r.ATIENDE; 
+            document.getElementById('db_h_inicio').value = r.H_INICIO; 
+            document.getElementById('db_h_fin').value = r.H_FIN; 
+            document.getElementById('db_inf_tec').value = r.INF_TECNICO; 
+            
+            // Reclamo fields
+            if(document.getElementById('rec_conectores')) document.getElementById('rec_conectores').value = r.REC_CONECTORES || "";
+            if(document.getElementById('rec_acometida')) document.getElementById('rec_acometida').value = r.REC_ACOMETIDA || "";
+            if(document.getElementById('rec_caja_dist')) document.getElementById('rec_caja_dist').value = r.REC_CAJA || "";
+            if(document.getElementById('rec_estado_medidor')) document.getElementById('rec_estado_medidor').value = r.REC_EST_MED || "";
+            if(document.getElementById('rec_disyuntores')) document.getElementById('rec_disyuntores').value = r.REC_DISY || "";
+            if(document.getElementById('rec_puesta_tierra')) document.getElementById('rec_puesta_tierra').value = r.REC_TIERRA || "";
+            if(document.getElementById('rec_info_adicional')) document.getElementById('rec_info_adicional').value = r.REC_INFO || "";
+            if(document.getElementById('rec_artefactos')) document.getElementById('rec_artefactos').value = r.REC_ART || "";
+            
+            // INSP fields
+            if(document.getElementById('insp_nombre_evento')) document.getElementById('insp_nombre_evento').value = r.INSP_NOMBRE || "";
+            if(document.getElementById('insp_desde')) document.getElementById('insp_desde').value = r.INSP_DESDE || "";
+            if(document.getElementById('insp_hasta')) document.getElementById('insp_hasta').value = r.INSP_HASTA || "";
+            if(document.getElementById('insp_horario')) document.getElementById('insp_horario').value = r.INSP_HORARIO || "";
+            if(document.getElementById('insp_carga')) document.getElementById('insp_carga').value = r.INSP_CARGA || "";
+            if(document.getElementById('insp_carga_total')) document.getElementById('insp_carga_total').value = r.INSP_TOTAL || "";
+            
+            document.getElementById('db_v_l1n').value = r.V_L1N; 
+            document.getElementById('db_v_l2n').value = r.V_L2N; 
+            document.getElementById('db_v_l3n').value = r.V_L3N; 
+            document.getElementById('db_v_l1l2').value = r.V_L1L2; 
+            document.getElementById('db_v_l2l3').value = r.V_L2L3; 
+            document.getElementById('db_v_l1l3').value = r.V_L1L3; 
+            document.getElementById('db_materiales').value = r.MATERIALES; 
+            document.getElementById('db_sello_bor').value = r.SELLO_BOR; 
+            document.getElementById('db_sello_cah').value = r.SELLO_CAH; 
+            document.getElementById('db_sello_dist').value = r.SELLO_DIST; 
+            document.getElementById('db_ret_num').value = r.MED_RET; 
+            document.getElementById('db_ret_lec').value = r.LEC_RET; 
+            document.getElementById('db_ret_bor').value = r.BORNERA; 
+            document.getElementById('db_ret_car').value = r.CARCASA; 
+            document.getElementById('db_ret_reg').value = r.REGISTRADOR; 
+            document.getElementById('db_ret_tapa').value = r.TAPA; 
+            document.getElementById('db_ret_sellos').value = r.SELLOS_RET; 
+            document.getElementById('db_new_num').value = r.MED_NEW; 
+            document.getElementById('db_new_lec').value = r.LEC_NEW; 
+            document.getElementById('db_ejecutado').value = r.EJECUTADO;
+            
+            toggleReportType(); // Ajusta UI
+            
+            document.getElementById('editIndicator').style.display = 'block'; 
+            document.getElementById('mainBtn').innerText = "ACTUALIZAR REPORTE"; 
+            document.getElementById('mainBtn').style.background = "var(--accent)"; 
+            document.querySelectorAll('.stock-check').forEach(window.validateStockEntry); 
+            document.getElementById('view-informe').scrollTop = 0;
+        }
+
+        function deleteRecord(id) { if (!confirm("¿Eliminar registro?")) return; let l = window.StorageManager.get('tech_db_final_v3', []).filter(x => x.id !== id); window.StorageManager.set('tech_db_final_v3', l); refreshTable(); }
+        function openDeleteAllModal() { if (window.StorageManager.get('tech_db_final_v3', []).length === 0) return window.showToast("⚠️ NO HAY DATOS"); document.getElementById('filenamePreview').innerText = `informe tecnico ${new Date().toISOString().slice(0,10)}.xlsx`; document.getElementById('deleteModal').style.display = 'flex'; }
+        function executeSecureWipe() { exportToExcel(); setTimeout(() => { window.StorageManager.remove('tech_db_final_v3'); refreshTable(); closeModal('deleteModal'); window.showToast("✅ HISTORIAL LIMPIO"); }, 1500); }
+
+        function exportToExcel() {
+            const l = window.StorageManager.get('tech_db_final_v3', []); if (l.length === 0) return;
+            const data = l.map(log => ({ 
+                "TIPO": log.TIPO || "ESTANDAR",
+                "OT": log.OT, "FECHA": log.FECHA, "ATIENDE": log.ATIENDE, "H_INICIO": log.H_INICIO, "H_FIN": log.H_FIN, 
+                "INF_TECNICO": log.INF_TECNICO, "V_L1N": log.V_L1N, "V_L2N": log.V_L2N, "V_L3N": log.V_L3N, "V_L1L2": log.V_L1L2, "V_L2L3": log.V_L2L3, "V_L1L3": log.V_L1L3, 
+                "CONECTORES": log.REC_CONECTORES || "", "ACOMETIDA": log.REC_ACOMETIDA || "", "CAJA_DIST": log.REC_CAJA || "",
+                "FISICO_MED": log.REC_EST_MED || "", "DISYUNTORES": log.REC_DISY || "", "TIERRA": log.REC_TIERRA || "",
+                "INFO_ADICIONAL": log.REC_INFO || "", "ARTEFACTOS": log.REC_ART || "",
+                "INSP_EVENTO": log.INSP_NOMBRE || "", "INSP_DESDE": log.INSP_DESDE || "", "INSP_HASTA": log.INSP_HASTA || "", "INSP_HORARIO": log.INSP_HORARIO || "", "INSP_CARGA": log.INSP_CARGA || "", "INSP_TOTAL": log.INSP_TOTAL || "",
+                "MATERIALES": log.MATERIALES.replace(/\n/g, " | "), 
+                "SELLO_BOR": log.SELLO_BOR, "SELLO_CAH": log.SELLO_CAH, "SELLO_DIST": log.SELLO_DIST, 
+                "MED_RET": log.MED_RET, "LEC_RET": log.LEC_RET, "BORNERA": log.BORNERA, "CARCASA": log.CARCASA, "REGISTRADOR": log.REGISTRADOR, "TAPA": log.TAPA, "SELLOS_RET": log.SELLOS_RET, 
+                "MED_NEW": log.MED_NEW, "LEC_NEW": log.LEC_NEW, "EJECUTADO": log.EJECUTADO 
+            }));
+            const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Reportes"); XLSX.writeFile(wb, `informes operativos eeq ${new Date().toISOString().slice(0,10)}.xlsx`);
+        }
+
+        function resetManual() { if (confirm("¿Limpiar formulario?")) resetFormInternal(); }
+        function resetFormInternal() { 
+            document.getElementById('reportForm').reset(); 
+            document.getElementById('editing_id').value = ""; 
+            document.getElementById('editIndicator').style.display = 'none'; 
+            document.getElementById('mainBtn').innerText = "COPIAR E INSCRIBIR REPORTE"; 
+            document.getElementById('mainBtn').style.background = "var(--primary)"; 
+            document.querySelectorAll('.stock-badge').forEach(b => b.innerText = ""); 
+            
+            document.getElementById('tipo_informe').value = "ESTANDAR";
+            toggleReportType();
+            
+            clearDraft(); 
+        }
+
+        window.saveDraft = function() { 
+            const fD = {}; 
+            document.querySelectorAll('#reportForm input:not([type="hidden"]), #reportForm textarea, #reportForm select').forEach(el => fD[el.id] = el.value); 
+            window.StorageManager.set('tech_report_draft', fD); 
+        }
+
+        function loadDraft() { 
+            const d = window.StorageManager.get('tech_report_draft', null); 
+            if (!d) { toggleReportType(); return; }
+            Object.keys(d).forEach(id => { const el = document.getElementById(id); if (el) el.value = d[id]; }); 
+            document.querySelectorAll('.stock-check').forEach(window.validateStockEntry); 
+            toggleReportType();
+        }
+
+        function clearDraft() { window.StorageManager.remove('tech_report_draft'); }
+        function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+        window.showToast = function(msg) { const t = document.getElementById('toast'); t.innerText = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 3000); }
+        function forceProcess() { closeModal('alarmModal'); processAll(); }
+    </script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('sw.js');
+  });
+}
+</script>
+
+</body>
+</html>
