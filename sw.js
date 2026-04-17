@@ -2,7 +2,7 @@ const CACHE_NAME = 'eeq-offline-v1';
 
 // 1. RECURSOS A CACHEAR (OBLIGATORIO)
 const URLS_TO_CACHE = [
-    './Informetotal.html',
+    '/gestor-operativo-app/index.html',
     './manifest.json',
     'https://cdn.tailwindcss.com',
     'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
