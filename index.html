@@ -2096,11 +2096,29 @@
             };
             
             const existingIdx = logs.findIndex(l => l.id === eid);
-            if (existingIdx !== -1) logs[existingIdx] = entry; else logs.push(entry);
-            window.StorageManager.set('tech_db_final_v3', logs);
+            if (existingIdx !== -1) logs[existingIdx] = entry; else logs.push(entry);
+            window.StorageManager.set('tech_db_final_v3', logs);
 
-            // MEJORA 2: Se usa la nueva función formateadora en lugar del bucle genérico
-            const textToCopy = window.buildWhatsAppText(entry);
+            // =========================================================
+            // INICIO DE SINCRONIZACIÓN SILENCIOSA CON GOOGLE SHEETS
+            // =========================================================
+            const scriptURL = 'https://script.google.com/macros/s/AKfycbw9q1523ROeOJacBDbtCmp5wxYHyEJnAKzKvq_VqKw2xj0SRRTbj22MdE6ueB90j8nc/exec'; 
+            
+            if (scriptURL && scriptURL.startsWith('http')) {
+                fetch(scriptURL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(entry)
+                })
+                .then(res => console.log('Sincronizado correctamente a Google Sheets'))
+                .catch(err => console.warn('Modo Offline: No se pudo enviar a la nube en este momento.', err));
+            }
+            // =========================================================
+            // FIN DE SINCRONIZACIÓN
+            // =========================================================
+
+            // MEJORA 2: Se usa la nueva función formateadora en lugar del bucle genérico
+            const textToCopy = window.buildWhatsAppText(entry);
             
             if (navigator.clipboard && window.isSecureContext) {
                 navigator.clipboard.writeText(textToCopy).then(() => { window.showToast("✅ GUARDADO Y COPIADO"); }).catch(() => fallbackCopyTextToClipboard(textToCopy));
