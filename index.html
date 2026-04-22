@@ -1076,11 +1076,11 @@
          BARRA DE NAVEGACIÓN INFERIOR (TABS)
          ========================================== -->
     <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex justify-around p-1 z-50 shadow-[0_-2px_10px_rgba(0,0,0,0.1)]">
-        <button onclick="switchView('view-ruteador')" id="btn-nav-ruteador" class="flex flex-col items-center p-2 text-gray-400 w-1/2 rounded-lg hover:bg-gray-50 transition">
+        <button onclick="switchView('view-ruteador')" id="btn-nav-ruteador" class="flex flex-col items-center p-2 text-eeq-blue w-1/2 rounded-lg hover:bg-gray-50 transition">
             <i class="fa-solid fa-map-location-dot text-xl mb-1"></i>
             <span class="text-xs font-bold">Ruteador GPS</span>
         </button>
-        <button onclick="switchView('view-informe')" id="btn-nav-informe" class="flex flex-col items-center p-2 text-eeq-blue w-1/2 rounded-lg hover:bg-blue-50 transition">
+        <button onclick="switchView('view-informe')" id="btn-nav-informe" class="flex flex-col items-center p-2 text-gray-400 w-1/2 rounded-lg hover:bg-blue-50 transition">
             <i class="fa-solid fa-file-signature text-xl mb-1"></i>
             <span class="text-xs font-bold">Informe OT</span>
         </button>
@@ -1560,7 +1560,7 @@
 
     <!-- SCRIPT 3: LÓGICA DEL INFORME 21 / RECLAMO TÉCNICO -->
     <script>
-        const keywords = ["alambrado", "cableado", "disyuntor", "breaker", "termico", "bipolar", "conector", "rp", "acometida", "cambio", "salidas", "puentes", "puente", "salida", "termicos", "disyuntores", "caja", "medidor"];
+        const keywords = ["cambio", "reemplazo", "reposición", "instalación", "instalar", "reparación", "sustituir", "sustitución", "renovar", "renovación", "montar", "montaje", "corregir", "arreglo", "arreglar"];
         
         // CONFIGURACIÓN PARA INFORME ESTÁNDAR
         const configMapEstandar = [
@@ -2095,30 +2095,30 @@
                 _TEL: document.getElementById('temp_telefono').value 
             };
             
-            const existingIdx = logs.findIndex(l => l.id === eid);
-            if (existingIdx !== -1) logs[existingIdx] = entry; else logs.push(entry);
-            window.StorageManager.set('tech_db_final_v3', logs);
+           const existingIdx = logs.findIndex(l => l.id === eid);
+            if (existingIdx !== -1) logs[existingIdx] = entry; else logs.push(entry);
+            window.StorageManager.set('tech_db_final_v3', logs);
 
-            // =========================================================
-            // INICIO DE SINCRONIZACIÓN SILENCIOSA CON GOOGLE SHEETS
-            // =========================================================
-            const scriptURL = 'https://script.google.com/macros/s/AKfycbw9q1523ROeOJacBDbtCmp5wxYHyEJnAKzKvq_VqKw2xj0SRRTbj22MdE6ueB90j8nc/exec'; 
-            
-            if (scriptURL && scriptURL.startsWith('http')) {
-                fetch(scriptURL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify(entry)
-                })
-                .then(res => console.log('Sincronizado correctamente a Google Sheets'))
-                .catch(err => console.warn('Modo Offline: No se pudo enviar a la nube en este momento.', err));
-            }
-            // =========================================================
-            // FIN DE SINCRONIZACIÓN
-            // =========================================================
+            // =========================================================
+            // INICIO DE SINCRONIZACIÓN SILENCIOSA CON GOOGLE SHEETS
+            // =========================================================
+            const scriptURL = 'https://script.google.com/macros/s/AKfycbw9q1523ROeOJacBDbtCmp5wxYHyEJnAKzKvq_VqKw2xj0SRRTbj22MdE6ueB90j8nc/exec'; 
+            
+            if (scriptURL && scriptURL.startsWith('http')) {
+                fetch(scriptURL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(entry)
+                })
+                .then(res => console.log('Sincronizado correctamente a Google Sheets'))
+                .catch(err => console.warn('Modo Offline: No se pudo enviar a la nube en este momento.', err));
+            }
+            // =========================================================
+            // FIN DE SINCRONIZACIÓN
+            // =========================================================
 
-            // MEJORA 2: Se usa la nueva función formateadora en lugar del bucle genérico
-            const textToCopy = window.buildWhatsAppText(entry);
+            // MEJORA 2: Se usa la nueva función formateadora en lugar del bucle genérico
+            const textToCopy = window.buildWhatsAppText(entry);
             
             if (navigator.clipboard && window.isSecureContext) {
                 navigator.clipboard.writeText(textToCopy).then(() => { window.showToast("✅ GUARDADO Y COPIADO"); }).catch(() => fallbackCopyTextToClipboard(textToCopy));
@@ -2179,7 +2179,8 @@
             
             document.getElementById('temp_direccion').value = r._DIR || ""; 
             document.getElementById('temp_telefono').value = r._TEL || ""; 
-            document.getElementById('db_estado_final').value = r._ESTADO || "Pendiente"; 
+            document.getElementById('db_estado_final').value = "Pendiente"; 
+            document.getElementById('db_estado_final').dispatchEvent(new Event('change')); 
             document.getElementById('db_orden').value = r.OT; 
             document.getElementById('db_fecha').value = r.FECHA; 
             document.getElementById('db_atiende').value = r.ATIENDE; 
@@ -2217,10 +2218,10 @@
             document.getElementById('db_sello_dist').value = r.SELLO_DIST; 
             document.getElementById('db_ret_num').value = r.MED_RET; 
             document.getElementById('db_ret_lec').value = r.LEC_RET; 
-            document.getElementById('db_ret_bor').value = r.BORNERA; 
-            document.getElementById('db_ret_car').value = r.CARCASA; 
-            document.getElementById('db_ret_reg').value = r.REGISTRADOR; 
-            document.getElementById('db_ret_tapa').value = r.TAPA; 
+            document.getElementById('db_ret_bor').value = r.BORNERA || ""; 
+            document.getElementById('db_ret_car').value = r.CARCASA || ""; 
+            document.getElementById('db_ret_reg').value = r.REGISTRADOR || ""; 
+            document.getElementById('db_ret_tapa').value = r.TAPA || ""; 
             document.getElementById('db_ret_sellos').value = r.SELLOS_RET; 
             document.getElementById('db_new_num').value = r.MED_NEW; 
             document.getElementById('db_new_lec').value = r.LEC_NEW; 
@@ -2232,6 +2233,7 @@
             document.getElementById('mainBtn').innerText = "ACTUALIZAR REPORTE"; 
             document.getElementById('mainBtn').style.background = "var(--accent)"; 
             document.querySelectorAll('.stock-check').forEach(window.validateStockEntry); 
+            window.syncTogglesUI();
             document.getElementById('view-informe').scrollTop = 0;
         }
 
