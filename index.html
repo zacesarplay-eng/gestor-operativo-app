@@ -1127,6 +1127,15 @@
             const inputOrden = document.getElementById('db_orden');
             const inputMedRet = document.getElementById('db_ret_num');
             
+            // CORRECCIÓN: Desvincular de cualquier edición anterior para evitar sobrescrituras
+            const editingId = document.getElementById('editing_id');
+            if (editingId && editingId.value !== "") {
+                editingId.value = ""; 
+                document.getElementById('editIndicator').style.display = 'none'; 
+                document.getElementById('mainBtn').innerText = "COPIAR E INSCRIBIR REPORTE"; 
+                document.getElementById('mainBtn').style.background = "var(--primary)"; 
+            }
+
             if (inputOrden) {
                 inputOrden.value = orderNumber;
             }
@@ -1604,129 +1613,188 @@
 
         // --- MEJORA: FORMATO WHATSAPP LIMPIO, ORDENADO Y CON UNIDADES ---
         window.buildWhatsAppText = function(log) {
-            // Usaremos un arreglo de "bloques" para garantizar que NO haya dobles espacios irregulares.
-            // Al final, uniremos todos los bloques con exactamente '\n\n' (una línea en blanco de separación).
-            let parts = []; 
+            let parts = [];
+
+            // --- ENCABEZADO COMÚN ---
+            parts.push(`N° DE ORDEN: ${log.OT || ""}`);
             
-            // --- ENCABEZADO ---
-            let header = [`N° DE ORDEN: ${log.OT}`];
-            let subHeader = [];
-            if (log.FECHA) subHeader.push(`FECHA: ${log.FECHA}`);
-            if (log.H_INICIO) subHeader.push(`HORA INICIO: ${log.H_INICIO}`);
-            if (log.H_FIN) subHeader.push(`HORA FIN: ${log.H_FIN}`);
-            
-            // IMPLEMENTACIÓN ÚNICA: Cambio de etiqueta de "ATENDIDO POR:" a "ATIENDE:"
-            if (log.ATIENDE) subHeader.push(`ATIENDE: ${log.ATIENDE}`);
-            
-            if (subHeader.length > 0) {
-                parts.push(header.join('\n'));
-                parts.push(subHeader.join('\n'));
+            let meta = [];
+            if (log.TIPO === 'ESTANDAR') {
+                if (log.FECHA) meta.push(`FECHA: ${log.FECHA}`);
             } else {
-                parts.push(header.join('\n'));
+                if (log.FECHA) meta.push(`FECHA DE EJECUCIÓN: ${log.FECHA}`);
             }
             
-            // --- 1. INFORME TÉCNICO ---
-            if (log.INF_TECNICO && log.INF_TECNICO.trim() !== "") {
-                parts.push(`1. INFORME TÉCNICO:\n${log.INF_TECNICO.trim()}`);
-            }
+            if (log.H_INICIO) meta.push(`HORA INICIO: ${log.H_INICIO}`);
+            if (log.H_FIN) meta.push(`HORA FIN: ${log.H_FIN}`);
+            if (log.ATIENDE) meta.push(`ATIENDE: ${log.ATIENDE}`);
             
-            // --- 2. VOLTAJES MEDIDOS ---
-            if (log.V_L1N || log.V_L2N || log.V_L3N || log.V_L1L2 || log.V_L2L3 || log.V_L1L3) {
-                let volts = [`2. VOLTAJES MEDIDOS:`];
+            if (meta.length > 0) {
+                parts.push(meta.join('\n'));
+            }
+
+            // --- BLOQUES AUXILIARES REUTILIZABLES ---
+            const getVoltages = () => {
+                let volts = [];
                 if (log.V_L1N) volts.push(`L1-N: ${log.V_L1N} [V]`);
                 if (log.V_L2N) volts.push(`L2-N: ${log.V_L2N} [V]`);
                 if (log.V_L3N) volts.push(`L3-N: ${log.V_L3N} [V]`);
                 if (log.V_L1L2) volts.push(`L1-L2: ${log.V_L1L2} [V]`);
                 if (log.V_L2L3) volts.push(`L2-L3: ${log.V_L2L3} [V]`);
                 if (log.V_L1L3) volts.push(`L1-L3: ${log.V_L1L3} [V]`);
-                parts.push(volts.join('\n'));
-            }
-            
-            // --- 3. MATERIALES UTILIZADOS ---
-            if (log.MATERIALES && log.MATERIALES.trim() !== "") {
-                let mats = [`3. MATERIALES UTILIZADOS:`];
-                log.MATERIALES.split('\n').filter(m => m.trim() !== "").forEach(m => mats.push(`- ${m.trim()}`));
-                parts.push(mats.join('\n'));
-            }
-            
-            // --- 4. MEDIDOR EXISTENTE Y/O RETIRADO ---
-            let sec4 = [];
-            if (log.MED_RET) sec4.push(`N°: ${log.MED_RET}`);
-            if (log.LEC_RET) sec4.push(`LECTURA: ${log.LEC_RET}`);
-            
-            let sec4Estado = [];
-            if (log.BORNERA && log.BORNERA !== "--") sec4Estado.push(`- Bornera: ${log.BORNERA}`);
-            if (log.CARCASA && log.CARCASA !== "--") sec4Estado.push(`- Carcasa: ${log.CARCASA}`);
-            if (log.REGISTRADOR && log.REGISTRADOR !== "--") sec4Estado.push(`- Registrador: ${log.REGISTRADOR}`);
-            if (log.TAPA && log.TAPA !== "--") sec4Estado.push(`- Tapa bornera: ${log.TAPA}`);
-            if (log.SELLOS_RET && log.SELLOS_RET !== "--") sec4Estado.push(`- Sellos: ${log.SELLOS_RET}`);
-            
-            if (sec4Estado.length > 0) {
-                if (sec4.length > 0) sec4.push(""); // Una línea de separación entre lectura y estado
-                sec4.push(sec4Estado.join('\n'));
-            }
-            
-            if (sec4.length > 0) {
-                parts.push(`4. MEDIDOR EXISTENTE Y/O RETIRADO:\n${sec4.join('\n')}`);
-            }
-            
-            // --- 5. MEDIDOR NUEVO ---
-            let sec5 = [];
-            if (log.MED_NEW) sec5.push(`N°: ${log.MED_NEW}`);
-            if (log.LEC_NEW) sec5.push(`LECTURA: ${log.LEC_NEW}`);
-            
-            if (sec5.length > 0) {
-                parts.push(`5. MEDIDOR NUEVO:\n${sec5.join('\n')}`);
-            }
-            
-            // --- 6. EJECUTADO POR ---
-            if (log.EJECUTADO && log.EJECUTADO.trim() !== "") {
-                parts.push(`6. EJECUTADO POR:\n${log.EJECUTADO.trim()}`);
+                return volts.join('\n');
+            };
+
+            const getMaterialsWithSeals = () => {
+                let mats = [];
+                if (log.MATERIALES && log.MATERIALES.trim() !== "") {
+                    log.MATERIALES.split('\n')
+                        .filter(m => m.trim() !== "")
+                        .forEach(m => mats.push(`- ${m.trim()}`));
+                }
+                if (log.SELLO_BOR) mats.push(`- No. Sello en BR: ${log.SELLO_BOR}`);
+                if (log.SELLO_CAH) mats.push(`- No. Sello en CAH: ${log.SELLO_CAH}`);
+                if (log.SELLO_DIST) mats.push(`- No. Sello en CD: ${log.SELLO_DIST}`);
+                return mats.join('\n');
+            };
+
+            const getOldMeter = () => {
+                let old = [];
+                if (log.MED_RET) old.push(`N°: ${log.MED_RET}`);
+                if (log.LEC_RET) old.push(`LECTURA: ${log.LEC_RET}`);
+                
+                let estado = [];
+                if (log.BORNERA && log.BORNERA !== "--") estado.push(`- Bornera: ${log.BORNERA}`);
+                if (log.CARCASA && log.CARCASA !== "--") estado.push(`- Carcasa: ${log.CARCASA}`);
+                if (log.REGISTRADOR && log.REGISTRADOR !== "--") estado.push(`- Registrador: ${log.REGISTRADOR}`);
+                if (log.TAPA && log.TAPA !== "--") estado.push(`- Tapa bornera: ${log.TAPA}`);
+                if (log.SELLOS_RET && log.SELLOS_RET !== "--") estado.push(`- Sellos: ${log.SELLOS_RET}`);
+                
+                if (estado.length > 0) {
+                    old.push(estado.join('\n'));
+                }
+                return old.join('\n');
+            };
+
+            const getNewMeter = () => {
+                let newM = [];
+                if (log.MED_NEW) newM.push(`N°: ${log.MED_NEW}`);
+                if (log.LEC_NEW) newM.push(`LECTURA: ${log.LEC_NEW}`);
+                return newM.join('\n');
+            };
+
+            // --- CONSTRUCCIÓN POR PLANTILLAS ---
+            switch (log.TIPO) {
+                case 'ESTANDAR':
+                    if (log.INF_TECNICO) parts.push(`1) INFORME TÉCNICO:\n${log.INF_TECNICO.trim()}`);
+                    
+                    let v_est = getVoltages();
+                    if (v_est) parts.push(`2) VOLTAJES MEDIDOS:\n${v_est}`);
+                    
+                    let m_est = getMaterialsWithSeals();
+                    if (m_est) parts.push(`3) MATERIALES UTILIZADOS:\n${m_est}`);
+                    
+                    let o_est = getOldMeter();
+                    if (o_est) parts.push(`4) MEDIDOR EXISTENTE Y/O RETIRADO:\n${o_est}`);
+                    
+                    let n_est = getNewMeter();
+                    if (n_est) parts.push(`5) MEDIDOR NUEVO:\n${n_est}`);
+                    
+                    if (log.EJECUTADO) parts.push(`6) EJECUTADO POR:\n${log.EJECUTADO.trim()}`);
+                    break;
+
+                case 'RECLAMO':
+                    if (log.INF_TECNICO) parts.push(`1) INFORME TÉCNICO:\n${log.INF_TECNICO.trim()}`);
+                    
+                    let v_rec = getVoltages();
+                    if (v_rec) parts.push(`2) VOLTAJES MEDIDOS:\n${v_rec}`);
+                    
+                    if (log.REC_CONECTORES) parts.push(`3) VERIFICACIÓN DE CONECTORES:\n${log.REC_CONECTORES}`);
+                    if (log.REC_ACOMETIDA) parts.push(`4) VERIFICACIÓN DE ACOMETIDA:\n${log.REC_ACOMETIDA}`);
+                    if (log.REC_CAJA) parts.push(`5) VERIFICACIÓN CAJA DE DISTRIBUCIÓN:\n${log.REC_CAJA}`);
+                    if (log.REC_EST_MED) parts.push(`6) VERIFICACIÓN DEL ESTADO FISICO MEDIDOR:\n${log.REC_EST_MED}`);
+                    if (log.REC_DISY) parts.push(`7) VERIFICACION DE DISYUNTORES:\n${log.REC_DISY}`);
+                    if (log.REC_TIERRA) parts.push(`8) REVISION DE PUESTA A TIERRA:\n${log.REC_TIERRA}`);
+                    
+                    let infoExtra = [];
+                    if (log.REC_INFO) infoExtra.push(`${log.REC_INFO}`);
+                    if (log.REC_ART) {
+                        infoExtra.push(`ARTEFACTOS DAÑADOS:`);
+                        log.REC_ART.split('\n')
+                            .filter(a => a.trim() !== "")
+                            .forEach(a => infoExtra.push(`- ${a.trim()}`));
+                    }
+                    if (infoExtra.length > 0) parts.push(`9) INFORMACION ADICIONAL:\n${infoExtra.join('\n')}`);
+                    
+                    let m_rec = getMaterialsWithSeals();
+                    if (m_rec) {
+                        parts.push(`10) MATERIALES UTILIZADOS:\n${m_rec}\nNOTA: GENERAR OT INTE PARA DESCARGO DE MATERIAL`);
+                    }
+                    
+                    let o_rec = getOldMeter();
+                    if (o_rec) parts.push(`11) MEDIDOR EXISTENTE Y/O RETIRADO:\n${o_rec}`);
+                    
+                    let n_rec = getNewMeter();
+                    if (n_rec) parts.push(`12) MEDIDOR NUEVO:\n${n_rec}`);
+                    
+                    if (log.EJECUTADO) parts.push(`13) EJECUTADO POR:\n${log.EJECUTADO.trim()}`);
+                    break;
+
+                case 'INSP':
+                    let inspServ = [];
+                    if (log.INSP_NOMBRE) inspServ.push(`NOMBRE DEL EVENTO: ${log.INSP_NOMBRE}`);
+                    if (log.INSP_DESDE) inspServ.push(`DESDE: ${log.INSP_DESDE}`);
+                    if (log.INSP_HASTA) inspServ.push(`HASTA: ${log.INSP_HASTA}`);
+                    if (log.INSP_HORARIO) inspServ.push(`HORARIO: ${log.INSP_HORARIO}`);
+                    if (inspServ.length > 0) parts.push(`1) DATOS DEL SERVICIO OCASIONAL:\n${inspServ.join('\n')}`);
+                    
+                    if (log.INF_TECNICO) parts.push(`2) INFORME TÉCNICO:\n${log.INF_TECNICO.trim()}`);
+                    
+                    let v_insp = getVoltages();
+                    if (v_insp) parts.push(`3) VOLTAJES MEDIDOS:\n${v_insp}`);
+                    
+                    let cargaBlock = [];
+                    if (log.INSP_CARGA) {
+                        log.INSP_CARGA.split('\n')
+                            .filter(c => c.trim() !== "")
+                            .forEach(c => cargaBlock.push(`- ${c.trim()}`));
+                    }
+                    if (log.INSP_TOTAL) cargaBlock.push(`- TOTAL: ${log.INSP_TOTAL}`);
+                    
+                    if (cargaBlock.length > 0) {
+                        cargaBlock.push(`NOTA: SI LA CARGA DECLARADA VARÍA Y SOBREPASA LA CAPACIDAD NOMINAL QUE SOPORTAN LAS DIFERENTES PARTES DE LA INSTALACIÓN, Y ESTO OCASIONA DAÑOS EN LA RED DE DISTRIBUCIÓN DE BAJA TENSIÓN, LA RESPONSABILIDAD SERÁ EXCLUSIVA DEL CLIENTE.\nFIRMA DE RESPONSABILIDAD: EN HOJA DE FORMATO`);
+                        parts.push(`4) CARGA DECLARADA:\n${cargaBlock.join('\n')}`);
+                    }
+                    
+                    let matsInsp = [];
+                    if (log.MATERIALES && log.MATERIALES.trim() !== "") {
+                        log.MATERIALES.split('\n')
+                            .filter(m => m.trim() !== "")
+                            .forEach(m => matsInsp.push(`- ${m.trim()}`));
+                    }
+                    if (matsInsp.length > 0) parts.push(`5) MATERIALES PREVISTOS PARA LA INSTALACIÓN:\n${matsInsp.join('\n')}`);
+                    
+                    if (log.EJECUTADO) parts.push(`6) EJECUTADO POR:\n${log.EJECUTADO.trim()}`);
+                    break;
             }
 
-            // Bloque de seguridad: Añadir info extra en caso de RECLAMO/INSP sin alterar el núcleo
-            if (log.TIPO === 'RECLAMO') {
-                let rec = [`DATOS ADICIONALES (RECLAMO):`];
-                if (log.REC_CONECTORES) rec.push(`VERIFICACIÓN DE CONECTORES: ${log.REC_CONECTORES}`);
-                if (log.REC_ACOMETIDA) rec.push(`VERIFICACIÓN DE ACOMETIDA: ${log.REC_ACOMETIDA}`);
-                if (log.REC_CAJA) rec.push(`CAJA DE DISTRIBUCIÓN: ${log.REC_CAJA}`);
-                if (log.REC_EST_MED) rec.push(`ESTADO FISICO MEDIDOR: ${log.REC_EST_MED}`);
-                if (log.REC_DISY) rec.push(`VERIFICACION DE DISYUNTORES: ${log.REC_DISY}`);
-                if (log.REC_TIERRA) rec.push(`PUESTA A TIERRA: ${log.REC_TIERRA}`);
-                if (log.REC_INFO) rec.push(`INFORMACION ADICIONAL: ${log.REC_INFO}`);
-                if (log.REC_ART) rec.push(`ARTEFACTOS DAÑADOS: ${log.REC_ART}`);
-                
-                if (rec.length > 1) {
-                    parts.push(rec.join('\n'));
-                }
-            }
-            if (log.TIPO === 'INSP') {
-                let ins = [`DATOS ADICIONALES (INSPECCIÓN):`];
-                if (log.INSP_NOMBRE) ins.push(`NOMBRE DEL EVENTO: ${log.INSP_NOMBRE}`);
-                if (log.INSP_DESDE || log.INSP_HASTA) ins.push(`DESDE: ${log.INSP_DESDE || ""} HASTA: ${log.INSP_HASTA || ""}`);
-                if (log.INSP_HORARIO) ins.push(`HORARIO: ${log.INSP_HORARIO}`);
-                if (log.INSP_CARGA) ins.push(`CARGA DECLARADA: ${log.INSP_CARGA}`);
-                if (log.INSP_TOTAL) ins.push(`TOTAL: ${log.INSP_TOTAL}`);
-                
-                if (ins.length > 1) {
-                    parts.push(ins.join('\n'));
-                }
-            }
-
-            // Al unir todos los bloques ('parts') con exactamente '\n\n', 
-            // se eliminan matemáticamente los dobles espacios aleatorios e irregulares.
             return parts.join('\n\n').trim();
         }
         // -------------------------------------------------------------
 
         document.addEventListener('DOMContentLoaded', () => {
             refreshTable(); loadChips('tech'); loadChips('material'); loadChips('activity'); loadDraft(); updateStockInfo();
+            let draftTimer; // Variable de control para el debounce
             document.querySelectorAll('#reportForm input, #reportForm textarea, #reportForm select').forEach(el => {
                 el.addEventListener('input', (e) => { 
-                    window.saveDraft(); 
+                    clearTimeout(draftTimer);
+                    draftTimer = setTimeout(() => window.saveDraft(), 500); 
                     if (e.target.classList.contains('stock-check')) window.validateStockEntry(e.target); 
                 });
-                el.addEventListener('change', window.saveDraft);
+                el.addEventListener('change', () => {
+                    clearTimeout(draftTimer);
+                    window.saveDraft(); // Guardado inmediato en change (p. ej. al seleccionar un dropdown)
+                });
             });
         });
 
@@ -1810,18 +1878,23 @@
         }
 
         function stopScanner() {
-            // FASE 1: Solución a posibles fugas de memoria del escáner
-            if (scannerInterval) {
-                clearInterval(scannerInterval);
-                scannerInterval = null;
+            try {
+                if (scannerInterval) {
+                    clearInterval(scannerInterval);
+                    scannerInterval = null;
+                }
+                if (scannerStream) {
+                    scannerStream.getTracks().forEach(track => {
+                        if (track.readyState === 'live') {
+                            try { track.stop(); } catch(e){}
+                        }
+                    });
+                    scannerStream = null;
+                }
+            } finally {
+                // Bloque seguro: Garantiza que el modal SIEMPRE se oculte, incluso si falla la cámara
+                document.getElementById('scannerModal').style.display = 'none';
             }
-            if (scannerStream) {
-                scannerStream.getTracks().forEach(track => {
-                    try { track.stop(); } catch(e){}
-                });
-                scannerStream = null;
-            }
-            document.getElementById('scannerModal').style.display = 'none';
         }
 
         async function handleFallbackCamera(input) {
