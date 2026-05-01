@@ -902,7 +902,12 @@
                     <div class="section-header"><span id="num_med_ret">4.</span> MEDIDOR RETIRADO O EXISTENTE</div>
                     <div class="field"><label for="db_ret_num">N° Medidor</label><input type="text" id="db_ret_num"></div>
                     <div class="grid grid-2">
-                        <div class="field"><label for="db_ret_lec">Lectura</label><input type="text" inputmode="decimal" id="db_ret_lec"></div>
+                        <!-- LECTURAS UNIFICADAS -->
+                        <div style="display: flex; gap: 8px; justify-content: space-between; grid-column: 1 / -1; margin-bottom: 8px;">
+                            <div class="field" style="flex: 1; margin-bottom: 0;"><label for="db_ret_lec" style="font-size: 0.65rem; color: #4b5563;">Lec_KWH</label><input type="text" id="db_ret_lec"></div>
+                            <div class="field" style="flex: 1; margin-bottom: 0;"><label for="db_ret_lec_kw" style="font-size: 0.65rem; color: #4b5563;">Lec_KW</label><input type="text" id="db_ret_lec_kw"></div>
+                            <div class="field" style="flex: 1; margin-bottom: 0;"><label for="db_ret_lec_kvar" style="font-size: 0.65rem; color: #4b5563;">Lec_KVAR</label><input type="text" id="db_ret_lec_kvar"></div>
+                        </div>
                         
                         <!-- FASE 1 UI: Selects ocultos y Botones Toggles Inyectados -->
                         <div class="field">
@@ -955,14 +960,20 @@
                 <div class="report-section" id="section_med_new">
                     <div class="section-header"><span id="num_med_new">5.</span> MEDIDOR NUEVO</div>
                     <div class="grid grid-2">
-                        <div class="field">
+                        <!-- El input del medidor tomará todo el ancho para verse ordenado -->
+                        <div class="field" style="grid-column: 1 / -1;">
                             <label for="db_new_num">N° Medidor Nuevo <span id="stk_db_new_num" class="stock-badge"></span></label>
                             <div style="display: flex; height: 46px;">
                                 <input type="text" id="db_new_num" class="stock-check" style="flex: 1;">
                                 <button type="button" class="btn-scan" onclick="startScanner('db_new_num')" title="Escanear Código de Barras">📷</button>
                             </div>
                         </div>
-                        <div class="field"><label for="db_new_lec">Lectura Inicial</label><input type="text" inputmode="decimal" id="db_new_lec"></div>
+                        <!-- LECTURAS UNIFICADAS: Simétricas, sin marcas de agua -->
+                        <div style="display: flex; gap: 8px; justify-content: space-between; grid-column: 1 / -1; margin-bottom: 8px;">
+                            <div class="field" style="flex: 1; margin-bottom: 0;"><label for="db_new_lec" style="font-size: 0.65rem; color: #4b5563;">Lec_KWH</label><input type="text" id="db_new_lec"></div>
+                            <div class="field" style="flex: 1; margin-bottom: 0;"><label for="db_new_lec_kw" style="font-size: 0.65rem; color: #4b5563;">Lec_KW</label><input type="text" id="db_new_lec_kw"></div>
+                            <div class="field" style="flex: 1; margin-bottom: 0;"><label for="db_new_lec_kvar" style="font-size: 0.65rem; color: #4b5563;">Lec_KVAR</label><input type="text" id="db_new_lec_kvar"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -1689,10 +1700,31 @@
                 return mats.join('\n');
             };
 
+            const formatLecturas = (kwh, kw, kvar) => {
+                let vKwh = (kwh || "").toString().trim();
+                let vKw = (kw || "").toString().trim();
+                let vKvar = (kvar || "").toString().trim();
+
+                if (!vKwh && !vKw && !vKvar) return null;
+
+                // CASO 1: Solo lectura principal KWH (Compatibilidad órdenes antiguas)
+                if (vKwh && !vKw && !vKvar) return `LECTURA: ${vKwh}`;
+
+                // CASO 2: Varias lecturas independientes (SIN SUMAS NI CÁLCULOS)
+                let textParts = [];
+                if (vKwh) textParts.push(`Lec_KWH: ${vKwh}`);
+                if (vKw) textParts.push(`Lec_KW: ${vKw}`);
+                if (vKvar) textParts.push(`Lec_KVAR: ${vKvar}`);
+
+                return textParts.join('\n');
+            };
+
             const getOldMeter = () => {
                 let old = [];
                 if (log.MED_RET) old.push(`N°: ${log.MED_RET}`);
-                if (log.LEC_RET) old.push(`LECTURA: ${log.LEC_RET}`);
+                
+                let lecturasTxt = formatLecturas(log.LEC_RET, log.LEC_RET_KW, log.LEC_RET_KVAR);
+                if (lecturasTxt) old.push(lecturasTxt);
                 
                 let estado = [];
                 if (log.BORNERA && log.BORNERA !== "--") estado.push(`- Bornera: ${log.BORNERA}`);
@@ -1710,7 +1742,10 @@
             const getNewMeter = () => {
                 let newM = [];
                 if (log.MED_NEW) newM.push(`N°: ${log.MED_NEW}`);
-                if (log.LEC_NEW) newM.push(`LECTURA: ${log.LEC_NEW}`);
+                
+                let lecturasTxt = formatLecturas(log.LEC_NEW, log.LEC_NEW_KW, log.LEC_NEW_KVAR);
+                if (lecturasTxt) newM.push(lecturasTxt);
+                
                 return newM.join('\n');
             };
 
@@ -2197,6 +2232,9 @@
                 SELLO_DIST: document.getElementById('db_sello_dist').value, 
                 MED_RET: document.getElementById('db_ret_num').value, 
                 LEC_RET: document.getElementById('db_ret_lec').value, 
+                LEC_RET_KWH: document.getElementById('db_ret_lec').value, 
+                LEC_RET_KW: document.getElementById('db_ret_lec_kw') ? document.getElementById('db_ret_lec_kw').value : "", 
+                LEC_RET_KVAR: document.getElementById('db_ret_lec_kvar') ? document.getElementById('db_ret_lec_kvar').value : "", 
                 BORNERA: document.getElementById('db_ret_bor').value, 
                 CARCASA: document.getElementById('db_ret_car').value, 
                 REGISTRADOR: document.getElementById('db_ret_reg').value, 
@@ -2204,6 +2242,9 @@
                 SELLOS_RET: document.getElementById('db_ret_sellos').value, 
                 MED_NEW: document.getElementById('db_new_num').value, 
                 LEC_NEW: document.getElementById('db_new_lec').value, 
+                LEC_NEW_KWH: document.getElementById('db_new_lec').value, 
+                LEC_NEW_KW: document.getElementById('db_new_lec_kw') ? document.getElementById('db_new_lec_kw').value : "", 
+                LEC_NEW_KVAR: document.getElementById('db_new_lec_kvar') ? document.getElementById('db_new_lec_kvar').value : "", 
                 EJECUTADO: document.getElementById('db_ejecutado').value, 
                 _ESTADO: document.getElementById('db_estado_final').value, 
                 _DIR: document.getElementById('temp_direccion').value, 
@@ -2333,6 +2374,8 @@
             document.getElementById('db_sello_dist').value = r.SELLO_DIST; 
             document.getElementById('db_ret_num').value = r.MED_RET; 
             document.getElementById('db_ret_lec').value = r.LEC_RET; 
+            if (document.getElementById('db_ret_lec_kw')) document.getElementById('db_ret_lec_kw').value = r.LEC_RET_KW || "";
+            if (document.getElementById('db_ret_lec_kvar')) document.getElementById('db_ret_lec_kvar').value = r.LEC_RET_KVAR || "";
             document.getElementById('db_ret_bor').value = r.BORNERA || ""; 
             document.getElementById('db_ret_car').value = r.CARCASA || ""; 
             document.getElementById('db_ret_reg').value = r.REGISTRADOR || ""; 
@@ -2340,6 +2383,8 @@
             document.getElementById('db_ret_sellos').value = r.SELLOS_RET; 
             document.getElementById('db_new_num').value = r.MED_NEW; 
             document.getElementById('db_new_lec').value = r.LEC_NEW; 
+            if (document.getElementById('db_new_lec_kw')) document.getElementById('db_new_lec_kw').value = r.LEC_NEW_KW || "";
+            if (document.getElementById('db_new_lec_kvar')) document.getElementById('db_new_lec_kvar').value = r.LEC_NEW_KVAR || "";
             document.getElementById('db_ejecutado').value = r.EJECUTADO;
             
             toggleReportType(); // Ajusta UI
@@ -2368,8 +2413,8 @@
                 "INSP_EVENTO": log.INSP_NOMBRE || "", "INSP_DESDE": log.INSP_DESDE || "", "INSP_HASTA": log.INSP_HASTA || "", "INSP_HORARIO": log.INSP_HORARIO || "", "INSP_CARGA": log.INSP_CARGA || "", "INSP_TOTAL": log.INSP_TOTAL || "",
                 "MATERIALES": log.MATERIALES.replace(/\n/g, " | "), 
                 "SELLO_BOR": log.SELLO_BOR, "SELLO_CAH": log.SELLO_CAH, "SELLO_DIST": log.SELLO_DIST, 
-                "MED_RET": log.MED_RET, "LEC_RET": log.LEC_RET, "BORNERA": log.BORNERA, "CARCASA": log.CARCASA, "REGISTRADOR": log.REGISTRADOR, "TAPA": log.TAPA, "SELLOS_RET": log.SELLOS_RET, 
-                "MED_NEW": log.MED_NEW, "LEC_NEW": log.LEC_NEW, "EJECUTADO": log.EJECUTADO 
+                "MED_RET": log.MED_RET, "LEC_RET": log.LEC_RET, "LEC_RET_KWH": log.LEC_RET_KWH || log.LEC_RET, "LEC_RET_KW": log.LEC_RET_KW || "", "LEC_RET_KVAR": log.LEC_RET_KVAR || "", "BORNERA": log.BORNERA, "CARCASA": log.CARCASA, "REGISTRADOR": log.REGISTRADOR, "TAPA": log.TAPA, "SELLOS_RET": log.SELLOS_RET, 
+                "MED_NEW": log.MED_NEW, "LEC_NEW": log.LEC_NEW, "LEC_NEW_KWH": log.LEC_NEW_KWH || log.LEC_NEW, "LEC_NEW_KW": log.LEC_NEW_KW || "", "LEC_NEW_KVAR": log.LEC_NEW_KVAR || "", "EJECUTADO": log.EJECUTADO 
             }));
             const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Reportes"); XLSX.writeFile(wb, `informes operativos eeq ${new Date().toISOString().slice(0,10)}.xlsx`);
         }
