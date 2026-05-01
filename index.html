@@ -404,8 +404,13 @@
             display: none;
             align-items: center;
             justify-content: center;
-            z-index: 2000;
+            z-index: 2000; /* Modales normales del informe */
             padding: 20px;
+        }
+
+        /* AJUSTE SENIOR: El Mapa Operativo debe estar por encima de ABSOLUTAMENTE TODO */
+        #map-modal {
+            z-index: 99999 !important; /* Jerarquía máxima garantizada */
         }
         .informe-wrapper .modal {
             background: white;
@@ -573,6 +578,29 @@
         .popup-scrollable::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px;}
         .popup-scrollable::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px;}
         .popup-scrollable::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+
+        /* ==========================================
+           CORRECCIONES DE INTERFACES SPA (SENIOR)
+           ========================================== */
+        
+        /* 1. Solución Ruteador: Asegurar que ocupe todo el alto y scrollee libremente */
+        #view-ruteador {
+            height: calc(100vh - 60px);
+            height: calc(100dvh - 60px);
+            overflow-y: auto !important; 
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 80px; 
+        }
+
+        /* 2. Solución Bloques Intrusos: Desactivar totalmente el renderizado de vistas ocultas */
+        .view-container:not(.active) {
+            display: none !important; 
+        }
+
+        /* 3. Solución Mapa: El Mapa Operativo debe estar por encima de ABSOLUTAMENTE TODO */
+        #map-modal {
+            z-index: 99999 !important; 
+        }
     </style>
 </head>
 <body>
