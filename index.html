@@ -588,10 +588,11 @@
         #view-ruteador {
             height: calc(100vh - 60px);
             height: calc(100dvh - 60px);
+            padding-bottom: 0 !important; /* CORRECCIÓN: Destruye el bloque fantasma */
             overflow: hidden !important; 
         }
         #view-ruteador main {
-            padding-bottom: 100px !important;
+            padding-bottom: 40px !important; /* Da un ligero espacio para que la última tarjeta no pegue contra el borde */
         }
 
         /* 2. Solución Bloques Intrusos: Desactivar totalmente el renderizado de vistas ocultas */
