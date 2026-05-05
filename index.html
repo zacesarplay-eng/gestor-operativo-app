@@ -2260,6 +2260,11 @@
             // =========================================================
             const scriptURL = 'https://script.google.com/macros/s/AKfycbw9q1523ROeOJacBDbtCmp5wxYHyEJnAKzKvq_VqKw2xj0SRRTbj22MdE6ueB90j8nc/exec'; 
             
+            // --- INYECCIÓN DE USUARIO (MODO SILENCIOSO) ---
+            const userEmail = "za.cesarplay@gmail.com"; // ⚠️ REEMPLAZAR POR CORREO REAL
+            entry.usuario = userEmail; // Se añade sin alterar la estructura local original
+            // ----------------------------------------------
+
             if (scriptURL && scriptURL.startsWith('http')) {
                 fetch(scriptURL, {
                     method: 'POST',
