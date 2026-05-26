@@ -1232,35 +1232,43 @@
             }
         }
 
-        window.fillReport = function(orderNumber, medidorNumber) {
+        window.fillReport = function(orderNumber, medidorNumber, telefonoStr, clienteStr) {
             const inputOrden = document.getElementById('db_orden');
             const inputMedRet = document.getElementById('db_ret_num');
-            
+            const inputTelefono = document.getElementById('temp_telefono');
+            const inputDireccion = document.getElementById('temp_direccion');
+
             // CORRECCIÓN: Desvincular de cualquier edición anterior para evitar sobrescrituras
             const editingId = document.getElementById('editing_id');
             if (editingId && editingId.value !== "") {
-                editingId.value = ""; 
-                document.getElementById('editIndicator').style.display = 'none'; 
-                document.getElementById('mainBtn').innerText = "COPIAR E INSCRIBIR REPORTE"; 
-                document.getElementById('mainBtn').style.background = "var(--primary)"; 
+                editingId.value = "";
+                document.getElementById('editIndicator').style.display = 'none';
+                document.getElementById('mainBtn').innerText = "COPIAR E INSCRIBIR REPORTE";
+                document.getElementById('mainBtn').style.background = "var(--primary)";
             }
 
-            if (inputOrden) {
-                inputOrden.value = orderNumber;
-            }
-            
-            if (inputMedRet && medidorNumber && medidorNumber !== 'undefined' && medidorNumber !== 'null') {
+            if (inputOrden) inputOrden.value = orderNumber;
+
+            if (inputMedRet && medidorNumber && medidorNumber !== 'undefined' && medidorNumber !== 'null' && medidorNumber !== '')
                 inputMedRet.value = medidorNumber;
+
+            // Teléfono extraído del PDF → campo Teléfono de Referencia Logística
+            if (inputTelefono && telefonoStr && telefonoStr !== 'undefined' && telefonoStr !== 'null' && telefonoStr !== '')
+                inputTelefono.value = telefonoStr;
+
+            // Nombre cliente → campo Dirección de Referencia Logística (solo si estaba vacío)
+            if (inputDireccion && clienteStr && clienteStr !== 'undefined' && clienteStr !== 'null' && clienteStr !== '') {
+                if (inputDireccion.value.trim() === '') inputDireccion.value = clienteStr;
             }
-            
+
             if (window.saveDraft) window.saveDraft();
             if (window.validateStockEntry && inputOrden) window.validateStockEntry(inputOrden);
-            
+
             switchView('view-informe');
             document.getElementById('view-informe').scrollTop = 0;
-            
-            if (window.showToast) window.showToast("✅ OT " + window.escapeHTML(orderNumber) + " vinculada.");
-            if (window.checkFormState) window.checkFormState(); // <-- Dispara validación visual
+
+            if (window.showToast) window.showToast("\u2705 OT " + window.escapeHTML(orderNumber) + " vinculada.");
+            if (window.checkFormState) window.checkFormState();
         }
     </script>
 
@@ -1488,14 +1496,36 @@
         function extractDataFromText(rawText, source) {
             const text = rawText.replace(/\n/g, ' ');
             let orderNumber = "Desconocida", xVal = null, yVal = null, medidorVal = "";
+            let telefonoVal = "", clienteVal = "", observacionesVal = "";
 
-            // FASE 1: Regex con mayor tolerancia (fallback)
-            let matchOrder = text.match(/(?:No\.?\s*Orden|NUM\.?ORDEN|ORDEN\s*INTERNA)[\s:]*([0-9]{6,10})/i);
-            if (!matchOrder) matchOrder = text.match(/(?:OT|ORDEN)[\s\-\:]*([0-9]{6,10})\b/i);
-            
+            // Extracción número de orden (idéntico a prueba_13 que funciona correctamente)
+            const matchOrder = text.match(/(?:No\.?\s*Orden|NUM\.?ORDEN|ORDEN\s*INTERNA)[\s:]*([0-9]{6,10})/i);
             if (matchOrder && matchOrder[1]) orderNumber = matchOrder[1].trim();
             else { const fallbackOrder = text.match(/\b([25]\d{7})\b/); if (fallbackOrder) orderNumber = fallbackOrder[1]; }
 
+            // Extracción de observaciones
+            const matchObs = text.match(/Observaciones\s*[:\-]?\s*(.*)/i);
+            let searchArea = text;
+            if (matchObs && matchObs[1]) {
+                searchArea = matchObs[1];
+                let obsText = searchArea.split(/\b(?:FIRMA|FECHA DE EJECUCIÓN|ATENDIDO POR|NOMBRE DEL CLIENTE|REPORTE TÉCNICO|EJECUTADO POR|TRABAJO REALIZADO)\b/i)[0];
+                obsText = obsText.replace(/Ejecutado por:\s*[_/\s]+/gi, '');
+                observacionesVal = obsText.trim();
+            }
+
+            // Extracción de teléfonos (busca en la zona de observaciones primero)
+            const matchTels = searchArea.match(/\b(?:09\d{8}|0[2-8]\d{7})\b/g);
+            if (matchTels && matchTels.length > 0) {
+                telefonoVal = [...new Set(matchTels)].join(' / ');
+            }
+
+            // Extracción de nombre de cliente desde observaciones
+            const matchNombre = searchArea.match(/\b(?:SR|SRA|SRTA|CLIENTE|USUARIO|NOMBRE)[\.\s:]+([A-Za-z\u00C0-\u024F\s]{3,45}?)(?=\s*(?:09\d{8}|0[2-8]\d{7}|\d{6,}|\bC\.I\.?|\bRUC|\bTelf|\bCel|[-_]|$))/i);
+            if (matchNombre && matchNombre[1]) {
+                clienteVal = matchNombre[1].trim().replace(/\s+/g, ' ');
+            }
+
+            // Extracción de coordenadas
             const matchX = text.match(/(?:COORDENADA[S]?\s*X)[\s:]*([\d\.\,]+)/i);
             if (matchX && parseFloat(matchX[1]) > 10000) xVal = parseFloat(matchX[1].replace(/,/g, ''));
             else { const fallbackX = text.match(/\b(7\d{5}(?:[\.\,]\d+)?)\b/); if (fallbackX) xVal = parseFloat(fallbackX[1].replace(/,/g, '')); }
@@ -1504,6 +1534,7 @@
             if (matchY && parseFloat(matchY[1]) > 10000) yVal = parseFloat(matchY[1].replace(/,/g, ''));
             else { const fallbackY = text.match(/\b(99\d{5}(?:[\.\,]\d+)?)\b/); if (fallbackY) yVal = parseFloat(fallbackY[1].replace(/,/g, '')); }
 
+            // Extracción de medidor (número entre los dos slash del recuadro inferior izquierdo)
             const matchMedidor = text.match(/\b\d+\/([a-zA-Z0-9]+)\/[a-zA-Z0-9\-]+/i);
             if (matchMedidor && matchMedidor[1]) {
                 medidorVal = matchMedidor[1];
@@ -1519,28 +1550,35 @@
                         console.warn("Error al convertir coordenadas UTM", e);
                     }
                 }
-                const exists = window.extractedOrders.find(o => o.order === orderNumber);
+                // Duplicado real: misma orden Y mismas coordenadas X
+                // Dos órdenes distintas en el mismo predio (coords iguales) NO se confunden
+                const exists = window.extractedOrders.find(o => o.order === orderNumber && o.x === xVal);
                 if (exists) {
                     exists.duplicateCount = (exists.duplicateCount || 1) + 1;
-                    if (!exists.medidor && medidorVal) exists.medidor = medidorVal; 
+                    if (!exists.medidor && medidorVal) exists.medidor = medidorVal;
+                    if (!exists.telefono && telefonoVal) exists.telefono = telefonoVal;
+                    if (!exists.cliente && clienteVal) exists.cliente = clienteVal;
+                    if (!exists.observaciones && observacionesVal) exists.observaciones = observacionesVal;
                     saveRouterData();
-                    window.renderOrders(); 
+                    window.renderOrders();
                 } else {
-                    window.saveOrderToDB({ 
-                        order: orderNumber, 
-                        medidor: medidorVal, 
-                        x: xVal, 
-                        y: yVal, 
-                        lat: lat, 
-                        lng: lng, 
-                        source: source, 
-                        completed: false, 
-                        duplicateCount: 1 
+                    window.saveOrderToDB({
+                        order: orderNumber,
+                        medidor: medidorVal,
+                        telefono: telefonoVal,
+                        cliente: clienteVal,
+                        observaciones: observacionesVal,
+                        x: xVal,
+                        y: yVal,
+                        lat: lat,
+                        lng: lng,
+                        source: source,
+                        completed: false,
+                        duplicateCount: 1
                     });
                 }
             }
         }
-
         window.renderOrders = function() {
             const ordersContainer = document.getElementById('orders-container');
             const emptyState = document.getElementById('empty-state');
@@ -1587,6 +1625,8 @@
                                     <p class="text-[11px] text-gray-400 mt-1">
                                         <i class="fa-solid fa-file-lines mr-1"></i>${safeSource}
                                         ${safeMedidor ? `<br><span class="text-eeq-blue font-bold mt-1 inline-block"><i class="fa-solid fa-gauge mr-1"></i>Med: ${safeMedidor}</span>` : ''}
+                                        ${order.cliente ? `<br><span class="text-gray-600 font-semibold mt-1 inline-block text-[11px]"><i class="fa-solid fa-user mr-1"></i>${window.escapeHTML(order.cliente)}</span>` : ''}
+                                        ${order.telefono ? `<br><div class="flex flex-wrap gap-1 mt-1">` + order.telefono.split(' / ').map(tel => `<a href="tel:${tel}" class="text-green-700 bg-green-100 border border-green-300 px-2 py-0.5 rounded-full font-bold inline-block text-[10px] no-underline active:scale-95 transition-transform"><i class="fa-solid fa-phone mr-1"></i>${tel}</a>`).join('') + `</div>` : ''}
                                     </p>
                                 </div>
                             </div>
@@ -1598,7 +1638,7 @@
                     </div>
                     
                     <div class="bg-blue-50/50 p-2 grid grid-cols-4 gap-2">
-                        <button onclick="unifiedFillReport('${order.order}', '${order.medidor || ''}', '${order.dbId}', ${isCompleted}, false)" class="flex items-center justify-center gap-1 bg-eeq-blue hover:bg-blue-700 text-white py-2 px-1 rounded-lg font-medium shadow-sm text-[11px] sm:text-sm">
+                        <button onclick="unifiedFillReport('${order.order}', '${order.medidor || ''}', '${order.dbId}', ${isCompleted}, false, '${(order.telefono||'').replace(/'/g,'')}', '${(order.cliente||'').replace(/'/g,'')}')" class="flex items-center justify-center gap-1 bg-eeq-blue hover:bg-blue-700 text-white py-2 px-1 rounded-lg font-medium shadow-sm text-[11px] sm:text-sm">
                             <i class="fa-solid fa-pen-to-square"></i> Llenar
                         </button>
                         <button onclick="openMaps(${order.lat}, ${order.lng})" ${!hasValidCoords ? 'disabled' : ''} class="flex items-center justify-center gap-1 bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 py-2 px-1 rounded-lg font-medium disabled:opacity-50 shadow-sm text-[11px] sm:text-sm">
@@ -1630,7 +1670,7 @@
         }
 
         // --- NUEVA CAPA AUXILIAR: SINCRONIZACIÓN DE BOTONES LLENAR ---
-        window.unifiedFillReport = function(order, medidor, dbId, isCompleted, fromMap) {
+        window.unifiedFillReport = function(order, medidor, dbId, isCompleted, fromMap, telefono, cliente) {
             // 1. Si el clic viene del mapa, cerramos el modal limpiamente
             if (fromMap) {
                 window.closeMapViewer();
@@ -1642,8 +1682,8 @@
                 window.toggleCompleted(dbId, false);
             }
             
-            // 3. Finalmente, ejecutamos la redirección al informe intacta.
-            window.fillReport(order, medidor);
+            // 3. Finalmente, ejecutamos la redirección al informe con todos los datos extraídos.
+            window.fillReport(order, medidor, telefono || '', cliente || '');
         }
         // -------------------------------------------------------------
 
