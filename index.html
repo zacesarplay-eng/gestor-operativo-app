@@ -2934,7 +2934,7 @@ window.StorageManager.set('tech_db_final_v3', logs);
         }
 
         function deleteRecord(id) { if (!confirm("¿Eliminar registro?")) return; let l = window.StorageManager.get('tech_db_final_v3', []).filter(x => x.id !== id); window.StorageManager.set('tech_db_final_v3', l); refreshTable(); }
-        function openDeleteAllModal() { if (window.StorageManager.get('tech_db_final_v3', []).length === 0) return window.showToast("⚠️ NO HAY DATOS"); document.getElementById('filenamePreview').innerText = `informe tecnico ${new Date().toISOString().slice(0,10)}.xlsx`; document.getElementById('deleteModal').style.display = 'flex'; }
+        function openDeleteAllModal() { if (window.StorageManager.get('tech_db_final_v3', []).length === 0) return window.showToast("⚠️ NO HAY DATOS"); document.getElementById('filenamePreview').innerText = `informe tecnico ${new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0,10)}.xlsx`; document.getElementById('deleteModal').style.display = 'flex'; }
         function executeSecureWipe() { exportToExcel(); setTimeout(() => { window.StorageManager.remove('tech_db_final_v3'); refreshTable(); closeModal('deleteModal'); window.showToast("✅ HISTORIAL LIMPIO"); }, 1500); }
 
         function exportToExcel() {
@@ -2952,7 +2952,7 @@ window.StorageManager.set('tech_db_final_v3', logs);
                 "MED_RET": log.MED_RET, "LEC_RET": log.LEC_RET, "LEC_RET_KWH": log.LEC_RET_KWH || log.LEC_RET, "LEC_RET_KW": log.LEC_RET_KW || "", "LEC_RET_KVAR": log.LEC_RET_KVAR || "", "BORNERA": log.BORNERA, "CARCASA": log.CARCASA, "REGISTRADOR": log.REGISTRADOR, "TAPA": log.TAPA, "SELLOS_RET": log.SELLOS_RET, 
                 "MED_NEW": log.MED_NEW, "LEC_NEW": log.LEC_NEW, "LEC_NEW_KWH": log.LEC_NEW_KWH || log.LEC_NEW, "LEC_NEW_KW": log.LEC_NEW_KW || "", "LEC_NEW_KVAR": log.LEC_NEW_KVAR || "", "EJECUTADO": log.EJECUTADO 
             }));
-            const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Reportes"); XLSX.writeFile(wb, `informes operativos eeq ${new Date().toISOString().slice(0,10)}.xlsx`);
+            const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Reportes"); XLSX.writeFile(wb, `informes operativos eeq ${new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0,10)}.xlsx`);
         }
 
         function resetManual() { if (confirm("¿Limpiar formulario?")) resetFormInternal(); }
