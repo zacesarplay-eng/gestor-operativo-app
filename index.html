@@ -1331,8 +1331,10 @@
             }
 
             setTimeout(() => {
-                localLeafletMap.invalidateSize();
-                
+                // CORRECCIÓN: En móvil 250ms no alcanza para que el contenedor tenga dimensiones.
+                // Se fuerza invalidateSize dos veces: al abrir y después de fitBounds.
+                localLeafletMap.invalidateSize({ animate: false });
+
                 // Limpiar clusters en lugar de destruir la capa
                 window.markerClusterGroup.clearLayers();
                 
@@ -1392,7 +1394,9 @@
                 if (bounds.length > 0) {
                     localLeafletMap.fitBounds(bounds, { padding: [40, 40] });
                 }
-            }, 250);
+                // Segundo invalidateSize después de fitBounds para que los tiles carguen correctamente
+                setTimeout(() => { localLeafletMap.invalidateSize({ animate: false }); }, 300);
+            }, 400);
         }
 
         window.closeMapViewer = function() {
