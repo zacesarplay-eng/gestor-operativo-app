@@ -1309,7 +1309,10 @@
                 // AJUSTE: Servidor de tiles más permisivo para uso local, compatible con la caché PWA offline
                 L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', {
                     maxZoom: 19,
-                    attribution: '© OpenStreetMap, © CARTO'
+                    attribution: '© OpenStreetMap, © CARTO',
+                    keepBuffer: 6,
+                    updateWhenZooming: false,
+                    updateWhenIdle: false
                 }).addTo(localLeafletMap);
 
                 window.markerClusterGroup = L.markerClusterGroup({
@@ -1331,10 +1334,8 @@
             }
 
             setTimeout(() => {
-                // CORRECCIÓN: En móvil 250ms no alcanza para que el contenedor tenga dimensiones.
-                // Se fuerza invalidateSize dos veces: al abrir y después de fitBounds.
                 localLeafletMap.invalidateSize({ animate: false });
-
+                
                 // Limpiar clusters en lugar de destruir la capa
                 window.markerClusterGroup.clearLayers();
                 
@@ -1394,15 +1395,19 @@
                 if (bounds.length > 0) {
                     localLeafletMap.fitBounds(bounds, { padding: [40, 40] });
                 }
-                // Segundo invalidateSize después de fitBounds para que los tiles carguen correctamente
+                // Segundo invalidateSize post-fitBounds: garantiza carga correcta de tiles
+                // tras reposicionamiento. Necesario en Android donde el primer invalidateSize
+                // puede ejecutarse antes de que el layout flex tenga dimensiones físicas.
                 setTimeout(() => { localLeafletMap.invalidateSize({ animate: false }); }, 300);
-            }, 400);
+            }, 450);
         }
 
         window.closeMapViewer = function() {
             const mapModal = document.getElementById('map-modal');
             mapModal.classList.add('hidden');
             mapModal.classList.remove('flex');
+            // Limpiar markers al cerrar para liberar memoria en Android
+            if (window.markerClusterGroup) window.markerClusterGroup.clearLayers();
         }
 
         window.showModal = function(title, text, type = 'alert', onConfirm = null) {
