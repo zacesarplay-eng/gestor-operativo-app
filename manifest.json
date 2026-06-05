@@ -1,10 +1,10 @@
 {
   "name": "Ruteador GPS",
   "short_name": "Ruteador",
-  "start_url": "/gestor-operativo-app/index.html",
-  "scope": "/gestor-operativo-app/",
+  "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
-  "display_override": ["standalone"],
+  "display_override": ["standalone", "fullscreen"],
   "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#000000",
