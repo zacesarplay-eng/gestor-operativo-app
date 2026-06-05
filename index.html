@@ -632,6 +632,18 @@
             transition: all 0.2s ease;
         }
     </style>
+
+<script>
+        (function() {
+            document.addEventListener('contextmenu', e => e.preventDefault());
+            document.addEventListener('keydown', e => {
+                if (e.keyCode === 123 || (e.ctrlKey && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74 || e.keyCode === 67)) || (e.ctrlKey && (e.keyCode === 85 || e.keyCode === 83))) {
+                    e.preventDefault(); return false;
+                }
+            });
+        })();
+    </script>
+
 </head>
 <body>
 
@@ -2845,7 +2857,7 @@ window.StorageManager.set('tech_db_final_v3', logs);
                 
                 let remaining = [];
                 let processedCount = 0;
-                const scriptURL = 'https://script.google.com/macros/s/AKfycbw9q1523ROeOJacBDbtCmp5wxYHyEJnAKzKvq_VqKw2xj0SRRTbj22MdE6ueB90j8nc/exec'; 
+                const scriptURL = atob('aHR0cHM6Ly9zY3JpcHQuZ29vZ2xlLmNvbS9tYWNyb3Mvcy9BS2Z5Y2J3OXExNTIzUk9lT0phY0JEYnRDbXA1d3hZSHlFSm5BS3pLdnFfVnFLdzJ4ajBTUlJUYmoyMk1kRTZ1ZUI5MGo4bmMvZXhlYw=='); 
                 
                 for (let i = 0; i < q.length; i++) {
                     let job = q[i];
