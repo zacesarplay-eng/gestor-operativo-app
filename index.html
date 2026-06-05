@@ -888,8 +888,20 @@
                 <!-- BLOQUE EXCLUSIVO INSPECCIÓN INSP (Carga) -->
                 <div id="insp_carga_section" class="report-section" style="display: none;">
                     <div class="section-header">4. CARGA DECLARADA</div>
-                    <div class="field mb-2"><label for="insp_carga">CARGA DECLARADA</label><textarea id="insp_carga" placeholder="Detalle de la carga..."></textarea></div>
-                    <div class="field"><label for="insp_carga_total">TOTAL</label><input type="text" id="insp_carga_total" placeholder="Ej: 15 kW"></div>
+
+                    <!-- CALCULADORA DE CARGA (W → kW) — bloque aditivo, no modifica guardado ni exportación -->
+                    <div style="background: #f0f7ff; padding: 10px; border-radius: 8px; border: 1px dashed var(--primary); margin-bottom: 12px;">
+                        <label style="font-size: 0.65rem; font-weight: bold; color: var(--primary); margin-bottom: 8px; display: block;">CALCULADORA DE CARGA (W ➞ kW)</label>
+                        <div style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+                            <div class="field" style="flex: 1 1 60px; margin-bottom: 0;"><label style="font-size:0.65rem;">Cant.</label><input type="number" id="insp_item_qty" placeholder="Ej: 2" min="1" style="padding: 8px;"></div>
+                            <div class="field" style="flex: 2 1 120px; margin-bottom: 0;"><label style="font-size:0.65rem;">Descripción</label><input type="text" id="insp_item_desc" placeholder="Ej: Focos LED" style="padding: 8px;"></div>
+                            <div class="field" style="flex: 1 1 80px; margin-bottom: 0;"><label style="font-size:0.65rem;">Potencia (W) c/u</label><input type="number" id="insp_item_w" placeholder="Ej: 100" min="0" style="padding: 8px;"></div>
+                        </div>
+                        <button type="button" onclick="window.addInspItem()" style="background: var(--primary); color: white; padding: 10px; border-radius: 6px; font-size: 0.75rem; font-weight: bold; width: 100%; border: none; cursor: pointer;">➕ AÑADIR EQUIPO Y SUMAR</button>
+                    </div>
+
+                    <div class="field mb-2"><label for="insp_carga">DETALLE DE CARGA</label><textarea id="insp_carga" placeholder="Detalle de la carga..."></textarea></div>
+                    <div class="field"><label for="insp_carga_total">TOTAL CALCULADO</label><input type="text" id="insp_carga_total" placeholder="Ej: 15 kW" style="background: #e8f5e9; font-weight: bold; color: #2e7d32;"></div>
                     <input type="hidden" id="insp_nota_estatica" value="SI LA CARGA DECLARADA VARÍA Y SOBREPASA LA CAPACIDAD NOMINAL QUE SOPORTAN LAS DIFERENTES PARTES DE LA INSTALACIÓN, Y ESTO OCASIONA DAÑOS EN LA RED DE DISTRIBUCIÓN DE BAJA TENSIÓN, LA RESPONSABILIDAD SERÁ EXCLUSIVA DEL CLIENTE. FIRMA DE RESPONSABILIDAD: EN HOJA DE FORMATO">
                     <p style="font-size: 0.65rem; color: #555; margin-top: 8px; font-weight: bold; line-height: 1.4;">
                         NOTA: SI LA CARGA DECLARADA VARÍA Y SOBREPASA LA CAPACIDAD NOMINAL QUE SOPORTAN LAS DIFERENTES PARTES DE LA INSTALACIÓN, Y ESTO OCASIONA DAÑOS EN LA RED DE DISTRIBUCIÓN DE BAJA TENSIÓN, LA RESPONSABILIDAD SERÁ EXCLUSIVA DEL CLIENTE.<br>FIRMA DE RESPONSABILIDAD: EN HOJA DE FORMATO (Se adjuntará al reporte)
@@ -1508,9 +1520,14 @@
             let telefonoVal = "", clienteVal = "", observacionesVal = "";
 
             // Extracción número de orden (idéntico a prueba_13 que funciona correctamente)
-            const matchOrder = text.match(/(?:No\.?\s*Orden|NUM\.?ORDEN|ORDEN\s*INTERNA)[\s:]*([0-9]{6,10})/i);
+            // Regex ampliado (igual a Prueba 24): acepta cualquier dígito inicial y más separadores
+            const matchOrder = text.match(/(?:No[.\s]*Orden|NUM[.\s]*ORDEN|ORDEN\s*INTERNA)[\s:,"\-]*(\d+)/i);
             if (matchOrder && matchOrder[1]) orderNumber = matchOrder[1].trim();
-            else { const fallbackOrder = text.match(/\b([25]\d{7})\b/); if (fallbackOrder) orderNumber = fallbackOrder[1]; }
+            else {
+                // Fallback sin restricción de prefijo: acepta órdenes 0-9 de 5 a 15 dígitos
+                const fallbackOrder = text.match(/\b(\d{5,15})\b/);
+                if (fallbackOrder) orderNumber = fallbackOrder[1];
+            }
 
             // Extracción de observaciones
             const matchObs = text.match(/Observaciones\s*[:\-]?\s*(.*)/i);
@@ -2115,6 +2132,14 @@
             // -----------------------------------------------------------------------
 
             refreshTable(); loadChips('tech'); loadChips('material'); loadChips('activity'); loadDraft(); updateStockInfo();
+
+            // Listener aditivo: recalcula total kW cuando usuario edita manualmente el detalle de carga
+            const inspCargaEl = document.getElementById('insp_carga');
+            if (inspCargaEl) {
+                inspCargaEl.addEventListener('input', () => {
+                    if (window.calculateInspTotal) window.calculateInspTotal();
+                });
+            }
             let draftTimer; // Variable de control para el debounce
             document.querySelectorAll('#reportForm input, #reportForm textarea, #reportForm select').forEach(el => {
                 el.addEventListener('input', (e) => { 
@@ -2131,6 +2156,57 @@
             });
             window.checkFormState(); // Verifica al cargar por si hay un borrador guardado
         });
+
+        // CALCULADORA DE CARGA DECLARADA — funciones aditivas, no modifican ningún flujo existente
+        window.addInspItem = function() {
+            const qty = parseFloat(document.getElementById('insp_item_qty').value);
+            const desc = document.getElementById('insp_item_desc').value.trim();
+            const watts = parseFloat(document.getElementById('insp_item_w').value);
+
+            if (!qty || !desc || isNaN(watts)) {
+                window.showToast('⚠️ COMPLETE CANTIDAD, DESCRIPCIÓN Y POTENCIA (W)');
+                return;
+            }
+
+            const subtotal = qty * watts;
+            const line = `${qty} x ${desc} = ${subtotal} W`;
+
+            const textarea = document.getElementById('insp_carga');
+            if (textarea.value.trim() === '') {
+                textarea.value = line;
+            } else {
+                textarea.value += '\n' + line;
+            }
+
+            document.getElementById('insp_item_qty').value = '';
+            document.getElementById('insp_item_desc').value = '';
+            document.getElementById('insp_item_w').value = '';
+            document.getElementById('insp_item_qty').focus();
+
+            window.calculateInspTotal();
+            window.saveDraft();
+        }
+
+        window.calculateInspTotal = function() {
+            const textarea = document.getElementById('insp_carga');
+            if (!textarea) return;
+            const lines = textarea.value.split('\n');
+            let totalWatts = 0;
+            let foundParseable = false;
+
+            lines.forEach(line => {
+                const match = line.match(/=\s*([\d\.]+)\s*W/i);
+                if (match && match[1]) {
+                    totalWatts += parseFloat(match[1]);
+                    foundParseable = true;
+                }
+            });
+
+            if (foundParseable) {
+                const totalKW = totalWatts / 1000;
+                document.getElementById('insp_carga_total').value = `${totalKW.toFixed(2)} kW`;
+            }
+        }
 
         window.toggleReportType = function() {
             const type = document.getElementById('tipo_informe').value;
