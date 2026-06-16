@@ -1347,7 +1347,7 @@
                     attribution: '© OpenStreetMap, © CARTO',
                     keepBuffer: 6,
                     updateWhenZooming: false,
-                    updateWhenIdle: false
+                    updateWhenIdle: true
                 }).addTo(localLeafletMap);
 
                 window.markerClusterGroup = L.markerClusterGroup({
@@ -1366,6 +1366,14 @@
                     }
                 });
                 localLeafletMap.addLayer(window.markerClusterGroup);
+
+                // FIX ANDROID: fuerza recarga de tiles al terminar cualquier zoom
+                // Resuelve el cuadro gris en zoom máximo en Chrome Android
+                localLeafletMap.on('zoomend', function() {
+                    setTimeout(function() {
+                        localLeafletMap.invalidateSize({ animate: false });
+                    }, 150);
+                });
             }
 
             // Capturar posición guardada ANTES del timeout (memoria de sesión)
@@ -1391,7 +1399,8 @@
                     const safeMedidor = window.escapeHTML(order.medidor || '');
                     const safeSource = window.escapeHTML(order.source);
 
-                    marker.bindTooltip(safeOrder, {
+                    const mapLabel = order.displayIndex ? `${order.displayIndex}. ${safeOrder}` : safeOrder;
+                    marker.bindTooltip(mapLabel, {
                         permanent: true,
                         direction: 'top',
                         offset: [0, -25],
@@ -1541,6 +1550,9 @@
         
         window.saveOrderToDB = function(orderData) {
             orderData.dbId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+            // Índice visual persistente: máximo existente + 1, sobrevive recargas y borrados
+            const maxIdx = window.extractedOrders.reduce((m, o) => Math.max(m, o.displayIndex || 0), 0);
+            orderData.displayIndex = maxIdx + 1;
             window.extractedOrders.push(orderData);
             saveRouterData();
             window.renderOrders();
@@ -1748,7 +1760,7 @@
                                 </button>
                                 <div>
                                     <h3 class="font-bold ${isCompleted ? 'text-gray-500 line-through' : 'text-gray-800'} text-lg leading-tight">
-                                        Orden: #${safeOrder} ${(order.duplicateCount && order.duplicateCount > 1) ? `<span class="bg-purple-100 text-purple-700 border border-purple-300 px-1.5 py-0.5 rounded-md text-[10px] ml-2 font-bold uppercase no-underline shadow-sm">Repetida (x${order.duplicateCount})</span>` : ``}
+                                        ${order.displayIndex ? `<span class="text-gray-400 font-normal text-base mr-1">${order.displayIndex}.</span>` : ''}Orden: #${safeOrder} ${(order.duplicateCount && order.duplicateCount > 1) ? `<span class="bg-purple-100 text-purple-700 border border-purple-300 px-1.5 py-0.5 rounded-md text-[10px] ml-2 font-bold uppercase no-underline shadow-sm">Repetida (x${order.duplicateCount})</span>` : ``}
                                     </h3>
                                     <p class="text-[11px] text-gray-400 mt-1">
                                         <i class="fa-solid fa-file-lines mr-1"></i>${safeSource}
@@ -3010,8 +3022,11 @@ window.StorageManager.set('tech_db_final_v3', logs);
                 const safeMed = window.escapeHTML(log.MED_RET || '-');
                 const safeEstado = window.escapeHTML(log._ESTADO || 'Pendiente');
                 const safeId = window.escapeHTML(log.id);
+                // Índice visual: buscar en extractedOrders por número de OT
+                const _matchOrder = (window.extractedOrders || []).find(o => o.order === log.OT);
+                const _dispIdx = _matchOrder && _matchOrder.displayIndex ? `<span style="color:#aaa;font-weight:normal;margin-right:3px;">${_matchOrder.displayIndex}.</span>` : '';
 
-                tbody.innerHTML += `<tr><td>${safeOT}</td><td>${safeMed}</td><td><span class="status-badge ${sCl}">${safeEstado}</span></td><td><div class="action-btns"><button class="btn-action complete-btn" onclick="toggleCompleteInf('${safeId}')">${btnIcon}</button><button class="btn-action edit-btn" onclick="editRecord('${safeId}')">✎</button><button class="btn-action delete-btn" onclick="deleteRecord('${safeId}')">🗑</button></div></td></tr>`;
+                tbody.innerHTML += `<tr><td>${_dispIdx}${safeOT}</td><td>${safeMed}</td><td><span class="status-badge ${sCl}">${safeEstado}</span></td><td><div class="action-btns"><button class="btn-action complete-btn" onclick="toggleCompleteInf('${safeId}')">${btnIcon}</button><button class="btn-action edit-btn" onclick="editRecord('${safeId}')">✎</button><button class="btn-action delete-btn" onclick="deleteRecord('${safeId}')">🗑</button></div></td></tr>`;
             });
         }
 
