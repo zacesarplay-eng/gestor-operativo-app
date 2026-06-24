@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.zacesarplay_eng.twa",
+        "sha256_cert_fingerprints": ["45:65:77:3F:3A:9E:F8:D9:2D:20:DA:48:A4:8D:D0:97:2B:B7:73:C8:9E:09:FA:12:9A:FB:E9:B2:05:9B:53:F9"]
+      }
+    }]
