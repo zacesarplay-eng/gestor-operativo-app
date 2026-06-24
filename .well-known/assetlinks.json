@@ -1,8 +1,8 @@
 [{
-      "relation": ["delegate_permission/common.handle_all_urls"],
-      "target": {
-        "namespace": "android_app",
-        "package_name": "io.github.zacesarplay_eng.twa",
-        "sha256_cert_fingerprints": ["71:EA:91:01:22:9C:8B:31:DC:92:D4:DC:EC:AD:FF:F0:A4:71:7F:9E:FA:16:3D:E4:3F:92:B5:DB:E4:9B:93:7D"]
-      }
-    }]
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "io.github.zacesarplay_eng.twa",
+    "sha256_cert_fingerprints": ["71:EA:91:01:22:9C:8B:31:DC:92:D4:DC:EC:AD:FF:F0:A4:71:7F:9E:FA:16:3D:E4:3F:92:B5:DB:E4:9B:93:7D"]
+  }
+}]
