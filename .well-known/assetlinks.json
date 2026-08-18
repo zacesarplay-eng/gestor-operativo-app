@@ -3,6 +3,6 @@
   "target": {
     "namespace": "android_app",
     "package_name": "io.github.zacesarplay_eng.twa",
-    "sha256_cert_fingerprints": ["71:EA:91:01:22:9C:8B:31:DC:92:D4:DC:EC:AD:FF:F0:A4:71:7F:9E:FA:16:3D:E4:3F:92:B5:DB:E4:9B:93:7D"]
+    "sha256_cert_fingerprints": ["60:15:1B:1D:6C:84:81:A7:99:58:D4:84:40:2D:EF:1F:4E:27:11:53:CF:E4:B0:FE:54:26:42:C3:B7:2E:2C:D5"]
   }
 }]
